@@ -1,155 +1,295 @@
-import { useNavigate } from "react-router-dom";
-import { Mail, Building2, Briefcase, Shield, LogOut, Bell, Smartphone } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import {
+  Mail, Building2, Briefcase, Shield, LogOut,
+  Bell, Smartphone, KeyRound, ChevronRight, Moon, Sun
+} from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+
+/* ─── tiny primitives ───────────────────────────────────────────── */
+
+function Toggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative h-5 w-9 rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
+        checked
+          ? "border-orange-500 bg-orange-500"
+          : "border-border bg-muted"
+      )}
+    >
+      <span
+        className={cn(
+          "absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform duration-200",
+          checked && "translate-x-4"
+        )}
+      />
+    </button>
+  );
+}
+
+function Dot({ active }: { active: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-block h-1.5 w-1.5 rounded-full",
+        active ? "bg-emerald-400" : "bg-muted-foreground/30"
+      )}
+    />
+  );
+}
+
+/* ─── main component ─────────────────────────────────────────────── */
 
 export default function Profile() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const navigate = useNavigate();
   const { toast } = useToast();
   const [prefs, setPrefs] = useState({ email: true, push: false, weekly: true });
 
   if (!user) return null;
 
+  const initials  = `${user.first_name?.[0] ?? ""}${user.last_name?.[0] ?? ""}`.toUpperCase();
+  const fullName  = `${user.first_name} ${user.last_name}`.trim();
+  const roleLabel = user.role?.replace(/_/g, " ") ?? "";
+
+  const handleSignOut = async () => {
+    toast({ title: "Signing out…", description: "Ending your session securely." });
+    await logout();
+  };
+
   return (
-    <div className="space-y-6 max-w-4xl">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-widest text-accent">Account</p>
-        <h1 className="text-2xl lg:text-3xl font-bold tracking-tight mt-1">Profile & preferences</h1>
-        <p className="text-sm text-muted-foreground mt-1">Manage your DMW Robotics customer account.</p>
-      </div>
+    <div className="min-h-screen bg-background font-mono">
 
-      <Card className="card-elevated overflow-hidden">
-        <div className="h-24 bg-gradient-hero relative">
-          <div className="absolute inset-0 bg-gradient-glow opacity-60" />
+      {/* ── top rule ─── */}
+      <div className="h-px w-full bg-gradient-to-r from-transparent via-orange-500 to-transparent opacity-60" />
+
+      <div className="mx-auto max-w-5xl px-6 py-10">
+
+        {/* ── eyebrow ─── */}
+        <div className="mb-10 flex items-center gap-3">
+          <span className="text-[10px] font-bold uppercase tracking-[.25em] text-orange-500">
+            DMW Robotics
+          </span>
+          <span className="h-px flex-1 bg-border" />
+          <span className="text-[10px] uppercase tracking-[.2em] text-muted-foreground">
+            Account / Profile
+          </span>
         </div>
-        <CardContent className="p-6 -mt-12 relative">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-            <Avatar className="h-20 w-20 ring-4 ring-background shadow-elev-md">
-              <AvatarFallback className="bg-gradient-accent text-accent-foreground text-xl font-bold">
-                {user.initials}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1 sm:pb-2">
-              <h2 className="text-xl font-bold">{user.name}</h2>
-              <p className="text-sm text-muted-foreground">{user.role} · {user.company}</p>
-            </div>
-            <div className="flex gap-2 sm:pb-2">
-              <Button variant="outline" size="sm">Edit profile</Button>
-            </div>
+
+        {/* ── two-column layout ─── */}
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-[1fr_340px]">
+
+          {/* ══ LEFT COLUMN ═══════════════════════════════════════════ */}
+          <div className="space-y-10">
+
+            {/* identity block */}
+            <section>
+              <div className="flex items-start gap-5">
+
+                {/* avatar */}
+                <div className="relative flex-shrink-0">
+                  <div className="flex h-16 w-16 items-center justify-center border border-orange-500/30 bg-orange-500/5 text-xl font-bold text-orange-500">
+                    {initials}
+                  </div>
+                  {/* corner accents */}
+                  <span className="absolute -top-px -left-px h-2.5 w-2.5 border-t border-l border-orange-500" />
+                  <span className="absolute -bottom-px -right-px h-2.5 w-2.5 border-b border-r border-orange-500" />
+                </div>
+
+                <div className="flex-1 pt-1">
+                  <h1 className="text-2xl font-black uppercase tracking-tight text-foreground leading-none">
+                    {fullName}
+                  </h1>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-[11px] uppercase tracking-[.18em] text-orange-500 font-semibold">
+                      {roleLabel}
+                    </span>
+                    {user.company && (
+                      <>
+                        <span className="text-muted-foreground/40">·</span>
+                        <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
+                          {user.company}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <button className="mt-1 border border-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:border-foreground hover:text-foreground transition-colors">
+                  Edit
+                </button>
+              </div>
+
+              {/* info strip */}
+              <div className="mt-6 grid grid-cols-1 gap-px sm:grid-cols-3 border border-border">
+                {[
+                  { icon: Mail,      label: "Email",   value: user.email },
+                  { icon: Building2, label: "Company", value: user.company || "—" },
+                  { icon: Briefcase, label: "Role",    value: roleLabel || "—" },
+                ].map((f) => (
+                  <div
+                    key={f.label}
+                    className="group flex items-center gap-3 bg-background px-4 py-3.5 hover:bg-muted/40 transition-colors"
+                  >
+                    <f.icon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/50 group-hover:text-orange-500 transition-colors" strokeWidth={1.5} />
+                    <div className="min-w-0">
+                      <p className="text-[9px] uppercase tracking-[.2em] text-muted-foreground/50">{f.label}</p>
+                      <p className="mt-0.5 truncate text-[12px] font-medium text-foreground">{f.value}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* notifications */}
+            <section>
+              <SectionHeader label="Notifications" index="01" />
+              <div className="mt-4 border border-border divide-y divide-border">
+                {[
+                  { key: "email",  icon: Mail,       title: "Email updates",      desc: "Milestone progress & ticket replies" },
+                  { key: "push",   icon: Smartphone, title: "Push notifications", desc: "Real-time alerts on mobile" },
+                  { key: "weekly", icon: Bell,        title: "Weekly digest",      desc: "Summary every Monday morning" },
+                ].map((p) => (
+                  <div
+                    key={p.key}
+                    className="flex items-center gap-4 px-4 py-4 hover:bg-muted/30 transition-colors"
+                  >
+                    <p.icon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" strokeWidth={1.5} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] font-medium text-foreground">{p.title}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">{p.desc}</p>
+                    </div>
+                    <Toggle
+                      checked={prefs[p.key as keyof typeof prefs]}
+                      onChange={(v) => setPrefs((s) => ({ ...s, [p.key]: v }))}
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6 pt-6 border-t border-border">
-            {[
-              { icon: Mail, label: "Email", value: user.email },
-              { icon: Building2, label: "Company", value: user.company },
-              { icon: Briefcase, label: "Role", value: user.role },
-            ].map((f) => (
-              <div key={f.label} className="flex items-start gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted shrink-0">
-                  <f.icon className="h-4 w-4 text-muted-foreground" strokeWidth={1.75} />
+          {/* ══ RIGHT COLUMN ══════════════════════════════════════════ */}
+          <div className="space-y-10">
+
+            {/* security */}
+            <section>
+              <SectionHeader label="Security" index="02" />
+              <div className="mt-4 border border-border divide-y divide-border">
+
+                {/* 2FA */}
+                <div className="flex items-start gap-4 px-4 py-4 hover:bg-muted/30 transition-colors">
+                  <Shield className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-emerald-500" strokeWidth={1.75} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-foreground">Two-factor auth</p>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <Dot active />
+                      <span className="text-[11px] text-emerald-500 font-medium">Enabled</span>
+                      <span className="text-[11px] text-muted-foreground">· Authenticator app</span>
+                    </div>
+                  </div>
+                  <button className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors mt-0.5">
+                    Manage <ChevronRight className="h-3 w-3" />
+                  </button>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{f.label}</p>
-                  <p className="text-sm font-semibold truncate mt-0.5">{f.value}</p>
+
+                {/* Password */}
+                <div className="flex items-start gap-4 px-4 py-4 hover:bg-muted/30 transition-colors">
+                  <KeyRound className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" strokeWidth={1.5} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-foreground">Password</p>
+                    <p className="text-[11px] text-muted-foreground mt-1">Last changed 30 days ago</p>
+                  </div>
+                  <button className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors mt-0.5">
+                    Change <ChevronRight className="h-3 w-3" />
+                  </button>
+                </div>
+
+                {/* Session */}
+                <div className="flex items-start gap-4 px-4 py-4">
+                  <Briefcase className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" strokeWidth={1.5} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-foreground">Active session</p>
+                    <p className="text-[11px] text-muted-foreground mt-1">Current device · This browser</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-[11px] font-medium text-emerald-500">Live</span>
+                  </div>
                 </div>
               </div>
-            ))}
+            </section>
+
+            {/* appearance */}
+            <section>
+              <SectionHeader label="Appearance" index="03" />
+              <div className="mt-4 border border-border">
+                <div className="flex items-center gap-4 px-4 py-4 hover:bg-muted/30 transition-colors">
+                  {theme === "dark"
+                    ? <Moon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" strokeWidth={1.5} />
+                    : <Sun  className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" strokeWidth={1.5} />
+                  }
+                  <div className="flex-1">
+                    <p className="text-[13px] font-medium text-foreground">Dark mode</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Currently {theme === "dark" ? "on" : "off"}
+                    </p>
+                  </div>
+                  <Toggle checked={theme === "dark"} onChange={toggleTheme} />
+                </div>
+              </div>
+            </section>
+
+            {/* sign out */}
+            <div className="pt-4 border-t border-border">
+              <button
+                onClick={handleSignOut}
+                className="group flex items-center gap-2 text-[11px] uppercase tracking-[.18em] font-semibold text-muted-foreground hover:text-red-500 transition-colors"
+              >
+                <LogOut className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" strokeWidth={1.75} />
+                Sign out of all devices
+              </button>
+            </div>
+
           </div>
-        </CardContent>
-      </Card>
+        </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="card-elevated">
-          <CardHeader>
-            <CardTitle className="text-base">Notification preferences</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {[
-              { key: "email", icon: Mail, title: "Email updates", desc: "Milestone progress, ticket replies" },
-              { key: "push", icon: Smartphone, title: "Push notifications", desc: "Real-time alerts on mobile" },
-              { key: "weekly", icon: Bell, title: "Weekly digest", desc: "Summary every Monday morning" },
-            ].map((p) => (
-              <div key={p.key} className="flex items-center gap-4 p-3 rounded-lg border border-border">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
-                  <p.icon className="h-4 w-4 text-muted-foreground" strokeWidth={1.75} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <Label htmlFor={p.key} className="text-sm font-semibold cursor-pointer">{p.title}</Label>
-                  <p className="text-xs text-muted-foreground">{p.desc}</p>
-                </div>
-                <Switch
-                  id={p.key}
-                  checked={prefs[p.key as keyof typeof prefs]}
-                  onCheckedChange={(v) => setPrefs((s) => ({ ...s, [p.key]: v }))}
-                />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        {/* ── bottom rule ─── */}
+        <div className="mt-16 flex items-center gap-3">
+          <span className="h-px flex-1 bg-border" />
+          <span className="text-[9px] uppercase tracking-[.3em] text-muted-foreground/40">
+            DMW Robotics · Secure Session
+          </span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
 
-        <Card className="card-elevated">
-          <CardHeader>
-            <CardTitle className="text-base">Security & appearance</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center gap-4 p-3 rounded-lg border border-success/20 bg-success/5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-success/10">
-                <Shield className="h-4 w-4 text-success" strokeWidth={2} />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-semibold">Multi-factor authentication</p>
-                <p className="text-xs text-success">Active · Authenticator app</p>
-              </div>
-              <Button variant="outline" size="sm">Manage</Button>
-            </div>
-
-            <div className="flex items-center gap-4 p-3 rounded-lg border border-border">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
-                <span className="text-base">{theme === "dark" ? "🌙" : "☀️"}</span>
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-semibold">Dark mode</p>
-                <p className="text-xs text-muted-foreground">Easier on the eyes for late-night reviews</p>
-              </div>
-              <Switch checked={theme === "dark"} onCheckedChange={toggleTheme} />
-            </div>
-
-            <div className="flex items-center gap-4 p-3 rounded-lg border border-border">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
-                <Briefcase className="h-4 w-4 text-muted-foreground" strokeWidth={1.75} />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-semibold">Active session</p>
-                <p className="text-xs text-muted-foreground">San Francisco · Chrome on macOS</p>
-              </div>
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-success">
-                <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-dot" /> Live
-              </span>
-            </div>
-
-            <Button
-              variant="outline"
-              className="w-full border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
-              onClick={() => {
-                logout();
-                toast({ title: "Signed out", description: "Your session has ended securely." });
-                navigate("/login");
-              }}
-            >
-              <LogOut className="h-4 w-4" /> Sign out of all devices
-            </Button>
-          </CardContent>
-        </Card>
       </div>
+    </div>
+  );
+}
+
+/* ── section header ─────────────────────────────────────────────── */
+function SectionHeader({ label, index }: { label: string; index: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-[9px] font-bold text-orange-500/60 tabular-nums">{index}</span>
+      <span className="h-px flex-1 bg-border" />
+      <span className="text-[10px] font-bold uppercase tracking-[.22em] text-muted-foreground">
+        {label}
+      </span>
     </div>
   );
 }

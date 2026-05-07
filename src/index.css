@@ -87,6 +87,15 @@
 
     --transition-base: cubic-bezier(0.4, 0, 0.2, 1);
   }
+ html, body, #root {
+  height: 100%;
+  overflow-y: auto;   /* ✅ enables vertical scroll */
+
+  ::-webkit-scrollbar {
+  width: 0px;
+  height: 0px;
+}
+}
 
   .dark {
     --background: 215 50% 7%;
