@@ -12,7 +12,7 @@ import {
   useCompanies,
   useCustomerAdminsByCompany,
   useTeamUsers,
-} from "@/hooks/useAdminProjects";
+} from "./../../hooks/UseAdminProjects";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
