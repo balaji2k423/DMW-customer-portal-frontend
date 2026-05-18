@@ -1,26 +1,35 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   CheckCircle2, Clock, Activity, FileText, BadgeCheck,
   AlertTriangle, Loader2, Calendar, Flag, TrendingUp,
   ArrowLeft, Plus, X, ChevronDown, ChevronRight,
   ListTodo, Trash2, Check, Circle, ShieldCheck,
-  GripVertical, BarChart3, Layers,
+  GripVertical, BarChart3, Layers, Users, Building2,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   milestonesService,
   type Milestone,
   type ProjectOption,
+  type CustomerAdminOption,
   type Subtask,
 } from "@/services/milestones";
 import { useAuth } from "@/contexts/AuthContext";
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Design system — bold, editorial, data-focused
-   Typography scale: readable sizes (no sub-10px body text)
-   Accent: orange-500 / amber-400
-   Neutral base: zinc
+   Design system — indigo / violet gradient theme
+   Accent: indigo-600 / violet-500
+   Neutral base: slate
 ───────────────────────────────────────────────────────────────────────────── */
+
+// Customer type — inferred from project list (projectId→customer)
+// The backend's ProjectOption may carry a customer_name field.
+// We derive a unique customer list from whatever is returned.
+export interface CustomerOption {
+  id: number | string; // numeric id preferred; falls back to name-as-id
+  name: string;
+}
 
 type UiStatus = "pending" | "in-progress" | "completed" | "delayed" | "cancelled";
 
@@ -36,17 +45,17 @@ const S = {
     text: "text-emerald-600 dark:text-emerald-400",
     badge: "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/25",
     card: "border-l-emerald-400",
-    bar: "bg-emerald-500",
+    bar: "bg-gradient-to-r from-emerald-500 to-teal-400",
     node: "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-300 dark:border-emerald-500/30",
   },
   "in-progress": {
     label: "In Progress",
-    dot: "bg-orange-500 animate-pulse",
-    text: "text-orange-600 dark:text-orange-400",
-    badge: "bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-500/25",
-    card: "border-l-orange-400",
-    bar: "bg-gradient-to-r from-orange-500 to-amber-400",
-    node: "bg-orange-50 dark:bg-orange-500/10 border-orange-300 dark:border-orange-500/30",
+    dot: "bg-indigo-500 animate-pulse",
+    text: "text-indigo-600 dark:text-indigo-400",
+    badge: "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/25",
+    card: "border-l-indigo-400",
+    bar: "bg-gradient-to-r from-indigo-500 to-violet-500",
+    node: "bg-indigo-50 dark:bg-indigo-500/10 border-indigo-300 dark:border-indigo-500/30",
   },
   delayed: {
     label: "Delayed",
@@ -54,36 +63,36 @@ const S = {
     text: "text-rose-600 dark:text-rose-400",
     badge: "bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/25",
     card: "border-l-rose-400",
-    bar: "bg-rose-500",
+    bar: "bg-gradient-to-r from-rose-500 to-rose-400",
     node: "bg-rose-50 dark:bg-rose-500/10 border-rose-300 dark:border-rose-500/30",
   },
   pending: {
     label: "Pending",
-    dot: "bg-zinc-400",
-    text: "text-zinc-500 dark:text-zinc-400",
-    badge: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700",
-    card: "border-l-zinc-300 dark:border-l-zinc-600",
-    bar: "bg-zinc-400",
-    node: "bg-zinc-100 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600",
+    dot: "bg-slate-400",
+    text: "text-slate-500 dark:text-slate-400",
+    badge: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700",
+    card: "border-l-slate-300 dark:border-l-slate-600",
+    bar: "bg-gradient-to-r from-slate-400 to-slate-300",
+    node: "bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600",
   },
   cancelled: {
     label: "Cancelled",
-    dot: "bg-zinc-300",
-    text: "text-zinc-400",
-    badge: "bg-zinc-50 dark:bg-zinc-900 text-zinc-400 border border-zinc-200 dark:border-zinc-800",
-    card: "border-l-zinc-200 dark:border-l-zinc-800",
-    bar: "bg-zinc-300",
-    node: "bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800",
+    dot: "bg-slate-300",
+    text: "text-slate-400",
+    badge: "bg-slate-50 dark:bg-slate-900 text-slate-400 border border-slate-200 dark:border-slate-800",
+    card: "border-l-slate-200 dark:border-l-slate-800",
+    bar: "bg-slate-300",
+    node: "bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800",
   },
 } satisfies Record<UiStatus, { label: string; dot: string; text: string; badge: string; card: string; bar: string; node: string }>;
 
 type SubtaskStatus = Subtask["status"] | "approved";
 
 const ST: Record<SubtaskStatus, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
-  todo:        { label: "To Do",       color: "text-zinc-400",   bg: "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400",              icon: <Circle className="h-4 w-4" />        },
-  in_progress: { label: "In Progress", color: "text-orange-500", bg: "bg-orange-100 dark:bg-orange-500/15 text-orange-700 dark:text-orange-400",   icon: <Activity className="h-4 w-4" />      },
-  done:        { label: "Done",        color: "text-emerald-500",bg: "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",icon: <CheckCircle2 className="h-4 w-4" />  },
-  approved:    { label: "Approved",    color: "text-sky-500",    bg: "bg-sky-100 dark:bg-sky-500/15 text-sky-700 dark:text-sky-400",               icon: <ShieldCheck className="h-4 w-4" />   },
+  todo:        { label: "To Do",       color: "text-slate-400",   bg: "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400",                icon: <Circle className="h-4 w-4" />        },
+  in_progress: { label: "In Progress", color: "text-indigo-500",  bg: "bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-400",          icon: <Activity className="h-4 w-4" />      },
+  done:        { label: "Done",        color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",       icon: <CheckCircle2 className="h-4 w-4" />  },
+  approved:    { label: "Approved",    color: "text-violet-500",  bg: "bg-violet-50 dark:bg-violet-500/15 text-violet-700 dark:text-violet-400",           icon: <ShieldCheck className="h-4 w-4" />   },
 };
 
 function initials(name: string) {
@@ -104,6 +113,14 @@ function progress(m: Milestone): number {
   return st === "in-progress" ? 45 : st === "delayed" ? 20 : 0;
 }
 
+/* ─── Shared input/select class ── */
+const inputCls = [
+  "w-full rounded-xl border border-slate-200 dark:border-slate-700",
+  "bg-white dark:bg-slate-900 px-4 py-2.5 text-[14px] outline-none",
+  "transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600",
+  "focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/15",
+].join(" ");
+
 /* ─── Divider ── */
 function Divider({ label }: { label: string }) {
   return (
@@ -118,12 +135,12 @@ function Divider({ label }: { label: string }) {
 /* ─── Stat card ── */
 function StatCard({ value, label, color, icon }: { value: number; label: string; color: string; icon: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1 rounded-xl border border-border bg-card px-5 py-4">
+    <div className="flex flex-col gap-1 rounded-2xl border border-border bg-card px-5 py-4 shadow-sm">
       <div className="flex items-center justify-between">
         <span className={cn("text-3xl font-black tabular-nums leading-none", color)}>{value}</span>
-        <span className="text-muted-foreground/40">{icon}</span>
+        <span className="text-muted-foreground/30">{icon}</span>
       </div>
-      <span className="text-[12px] font-semibold text-muted-foreground/70">{label}</span>
+      <span className="text-[12px] font-semibold text-muted-foreground/60">{label}</span>
     </div>
   );
 }
@@ -137,11 +154,11 @@ function ApproveModal({ title, description, loading, onConfirm, onClose }: {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
-        <div className="h-1 bg-gradient-to-r from-sky-400 to-emerald-400" />
+        <div className="h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500" />
         <div className="p-6">
           <div className="mb-1 flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 dark:bg-sky-500/10">
-              <ShieldCheck className="h-5 w-5 text-sky-500" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 dark:bg-indigo-500/10">
+              <ShieldCheck className="h-5 w-5 text-indigo-500" />
             </div>
             <h3 className="text-lg font-bold">{title}</h3>
           </div>
@@ -152,7 +169,7 @@ function ApproveModal({ title, description, loading, onConfirm, onClose }: {
               Cancel
             </button>
             <button onClick={onConfirm} disabled={loading}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-sky-500 py-2.5 text-[14px] font-bold text-white hover:bg-sky-600 disabled:opacity-60 transition-colors">
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 py-2.5 text-[14px] font-bold text-white hover:from-indigo-600 hover:to-violet-600 disabled:opacity-60 transition-all shadow-sm shadow-indigo-500/25">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
               {loading ? "Approving…" : "Approve"}
             </button>
@@ -178,12 +195,12 @@ function SubtaskRow({ subtask, canManage, onToggle, onDelete, onApprove }: {
 
   return (
     <div className={cn(
-      "group flex items-center gap-3 rounded-xl border px-4 py-3 transition-all",
+      "group flex items-center gap-3 rounded-xl border px-4 py-3 transition-all duration-150",
       isApproved
-        ? "border-sky-200 dark:border-sky-500/20 bg-sky-50/40 dark:bg-sky-500/5"
-        : "border-border bg-card hover:bg-muted/30 hover:border-border/70"
+        ? "border-violet-200 dark:border-violet-500/20 bg-violet-50/40 dark:bg-violet-500/5"
+        : "border-border bg-card hover:bg-slate-50 dark:hover:bg-slate-800/50 hover:border-slate-300 dark:hover:border-slate-600"
     )}>
-      <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/20 group-hover:text-muted-foreground/40" />
+      <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/20 group-hover:text-muted-foreground/40 cursor-grab" />
 
       {canManage && !isApproved ? (
         <button onClick={() => onToggle(subtask.id, nextMap[subtask.status] ?? "todo")}
@@ -196,32 +213,32 @@ function SubtaskRow({ subtask, canManage, onToggle, onDelete, onApprove }: {
 
       <span className={cn(
         "flex-1 text-[14px] leading-snug",
-        isApproved ? "text-muted-foreground/50 line-through" : "font-medium",
+        isApproved ? "text-muted-foreground/40 line-through" : "font-medium",
         subtask.status === "done" && !isApproved && "text-muted-foreground/60"
       )}>
         {subtask.title}
       </span>
 
       {subtask.assignee_name && (
-        <div className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-[11px] font-bold text-orange-600 dark:text-orange-400 sm:flex">
+        <div className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-500/10 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 sm:flex ring-2 ring-white dark:ring-slate-900">
           {initials(subtask.assignee_name)}
         </div>
       )}
 
-      <span className={cn("rounded-lg px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide", cfg.bg)}>
+      <span className={cn("rounded-lg px-2.5 py-1 text-[11px] font-semibold", cfg.bg)}>
         {cfg.label}
       </span>
 
       {canManage && subtask.status === "done" && (
         <button onClick={() => onApprove(subtask.id)}
-          className="shrink-0 flex items-center gap-1.5 rounded-lg border border-sky-200 dark:border-sky-500/30 bg-sky-50 dark:bg-sky-500/10 px-3 py-1.5 text-[11px] font-bold text-sky-600 dark:text-sky-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-sky-100 dark:hover:bg-sky-500/20">
+          className="shrink-0 flex items-center gap-1.5 rounded-lg border border-violet-200 dark:border-violet-500/30 bg-violet-50 dark:bg-violet-500/10 px-3 py-1.5 text-[11px] font-semibold text-violet-600 dark:text-violet-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-violet-100 dark:hover:bg-violet-500/20">
           <ShieldCheck className="h-3.5 w-3.5" /> Approve
         </button>
       )}
 
       {canManage && !isApproved && (
         <button onClick={() => onDelete(subtask.id)}
-          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/30 hover:text-rose-500">
+          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/30 hover:text-rose-500 p-1 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-500/10">
           <Trash2 className="h-4 w-4" />
         </button>
       )}
@@ -232,13 +249,13 @@ function SubtaskRow({ subtask, canManage, onToggle, onDelete, onApprove }: {
 /* ─────────────────────────────────────────────────────────────────────────────
    Milestone Detail
 ───────────────────────────────────────────────────────────────────────────── */
-function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdate, onSubtaskChange }: {
-  milestone: Milestone; index: number; onBack: () => void; canManage: boolean;
+function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMilestoneUpdate, onSubtaskChange }: {
+  milestone: Milestone; index: number; onBack: () => void; canManage: boolean; canApprove: boolean;
   onMilestoneUpdate: (m: Milestone) => void;
   onSubtaskChange: (id: number, s: Subtask[]) => void;
 }) {
-  const st  = STATUS_MAP[milestone.status] ?? "pending";
-  const cfg = S[st];
+  const st  = STATUS_MAP[milestone.status ?? ""] ?? "pending";
+const cfg = S[st];
 
   const [mounted, setMounted]     = useState(false);
   const [subtasks, setSubtasks]   = useState<Subtask[]>(milestone.subtasks || []);
@@ -297,9 +314,19 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
   const approveMilestone = async () => {
     setApprovingM(true);
     try {
-      const u = await milestonesService.update(milestone.id, { status: "completed" });
-      onMilestoneUpdate({ ...milestone, ...u, is_signed_off: true, status: "completed" });
-    } catch {} finally { setApprovingM(false); setShowApproveM(false); }
+      const signOffData = await milestonesService.signOff(milestone.id, "");
+      onMilestoneUpdate({
+        ...milestone,
+        status: "completed",
+        is_signed_off: true,
+        sign_off: signOffData,
+      });
+    } catch (err) {
+      console.error("Sign-off failed:", err);
+    } finally {
+      setApprovingM(false);
+      setShowApproveM(false);
+    }
   };
 
   return (
@@ -312,23 +339,23 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
         style={{ zIndex: 10 }}
       >
         {/* Top accent bar */}
-        <div className={cn("h-1", isApproved ? "bg-sky-500" : cfg.bar)} />
+        <div className={cn("h-1", isApproved ? "bg-gradient-to-r from-violet-500 to-purple-500" : cfg.bar)} />
 
         {/* ── Sticky header ── */}
         <div className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-md">
           <div className="flex items-center justify-between px-6 py-3">
             <button onClick={onBack}
-              className="group flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+              className="group flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-foreground">
               <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
               Back
             </button>
             <div className="flex items-center gap-2">
-              <span className={cn("rounded-lg px-3 py-1.5 text-[12px] font-bold uppercase tracking-wide", cfg.badge)}>
+              <span className={cn("rounded-lg px-3 py-1.5 text-[12px] font-semibold", cfg.badge)}>
                 <span className={cn("mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle bg-current", st === "in-progress" && "animate-pulse")} />
                 {cfg.label}
               </span>
               {milestone.is_signed_off && (
-                <span className="flex items-center gap-1.5 rounded-lg border border-emerald-200 dark:border-emerald-500/25 bg-emerald-50 dark:bg-emerald-500/10 px-3 py-1.5 text-[12px] font-bold text-emerald-700 dark:text-emerald-400">
+                <span className="flex items-center gap-1.5 rounded-lg border border-emerald-200 dark:border-emerald-500/25 bg-emerald-50 dark:bg-emerald-500/10 px-3 py-1.5 text-[12px] font-semibold text-emerald-700 dark:text-emerald-400">
                   <BadgeCheck className="h-3.5 w-3.5" /> Signed off
                 </span>
               )}
@@ -352,20 +379,20 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
           {/* Meta chips */}
           <div className="mt-5 flex flex-wrap gap-2.5">
             {milestone.owner_name && (
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3.5 py-2">
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-orange-500/15 text-[10px] font-bold text-orange-600 dark:text-orange-400">
+              <div className="flex items-center gap-2 rounded-xl border border-border bg-slate-50 dark:bg-slate-800/50 px-3.5 py-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-[10px] font-bold text-white">
                   {initials(milestone.owner_name)}
                 </div>
                 <span className="text-[13px] font-semibold">{milestone.owner_name}</span>
               </div>
             )}
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3.5 py-2">
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-slate-50 dark:bg-slate-800/50 px-3.5 py-2">
               <Calendar className="h-4 w-4 text-muted-foreground/50" />
               <span className="text-[13px] text-muted-foreground">Planned</span>
               <span className="text-[13px] font-bold">{fmt(milestone.planned_date)}</span>
             </div>
             {milestone.actual_date && (
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3.5 py-2">
+              <div className="flex items-center gap-2 rounded-xl border border-border bg-slate-50 dark:bg-slate-800/50 px-3.5 py-2">
                 <Clock className="h-4 w-4 text-muted-foreground/50" />
                 <span className="text-[13px] text-muted-foreground">Actual</span>
                 <span className={cn("text-[13px] font-bold",
@@ -375,7 +402,7 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
                 </span>
               </div>
             )}
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3.5 py-2">
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-slate-50 dark:bg-slate-800/50 px-3.5 py-2">
               <FileText className="h-4 w-4 text-muted-foreground/50" />
               <span className="text-[13px] text-muted-foreground">Deliverables</span>
               <span className="text-[13px] font-bold">{milestone.deliverable_count}</span>
@@ -387,27 +414,27 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-semibold text-muted-foreground">
                 {subtasks.length > 0 ? `${doneCount} of ${subtasks.length} subtasks complete` : "Progress"}
-                {approvedCnt > 0 && <span className="ml-2 text-sky-500">· {approvedCnt} approved</span>}
+                {approvedCnt > 0 && <span className="ml-2 text-violet-500">· {approvedCnt} approved</span>}
               </span>
               <span className={cn("text-[15px] font-black tabular-nums", cfg.text)}>{pct}%</span>
             </div>
-            <div className="h-3 overflow-hidden rounded-full bg-muted">
+            <div className="h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
               <div className={cn("h-full rounded-full transition-all duration-1000 delay-300", cfg.bar)}
                 style={{ width: mounted ? `${pct}%` : "0%" }} />
             </div>
           </div>
 
           {/* Approve milestone CTA */}
-          {canManage && !isApproved && milestone.status !== "cancelled" && (
+          {canApprove && !isApproved && milestone.status !== "cancelled" && (
             <div className="mt-5 flex items-center gap-3">
               <button
                 onClick={() => setShowApproveM(true)}
                 disabled={subtasks.length > 0 && !allDone}
                 className={cn(
-                  "flex items-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-bold transition-all",
+                  "flex items-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-semibold transition-all",
                   allDone || subtasks.length === 0
-                    ? "bg-sky-500 text-white hover:bg-sky-600 shadow-sm"
-                    : "bg-muted text-muted-foreground/40 cursor-not-allowed"
+                    ? "bg-gradient-to-r from-indigo-500 to-violet-500 text-white hover:from-indigo-600 hover:to-violet-600 shadow-sm shadow-indigo-500/25"
+                    : "bg-slate-100 dark:bg-slate-800 text-muted-foreground/40 cursor-not-allowed"
                 )}
               >
                 <ShieldCheck className="h-4 w-4" /> Approve Milestone
@@ -426,19 +453,20 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
           <section>
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500/10">
-                  <ListTodo className="h-4 w-4 text-orange-500" />
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500/10 to-violet-500/10">
+                  <ListTodo className="h-4 w-4 text-indigo-500" />
                 </div>
                 <h3 className="text-[17px] font-bold">Subtasks</h3>
                 {subtasks.length > 0 && (
-                  <span className="rounded-lg bg-muted px-2.5 py-1 text-[12px] font-bold text-muted-foreground">
+                  <span className="rounded-lg bg-indigo-50 dark:bg-indigo-500/10 px-2.5 py-1 text-[12px] font-semibold text-indigo-600 dark:text-indigo-400">
                     {doneCount}/{subtasks.length}
                   </span>
                 )}
               </div>
-              {canManage && (
+              {/* ── PATCH 1: hide "Add subtask" button when milestone is approved ── */}
+              {canManage && !isApproved && (
                 <button onClick={() => setShowInput(true)}
-                  className="flex items-center gap-2 rounded-xl border border-dashed border-border px-4 py-2 text-[13px] font-semibold text-muted-foreground transition-all hover:border-orange-400/60 hover:bg-orange-50 dark:hover:bg-orange-500/5 hover:text-orange-600 dark:hover:text-orange-400">
+                  className="flex items-center gap-2 rounded-xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/5 px-4 py-2 text-[13px] font-semibold text-indigo-600 dark:text-indigo-400 transition-all hover:bg-indigo-100 dark:hover:bg-indigo-500/10">
                   <Plus className="h-4 w-4" /> Add subtask
                 </button>
               )}
@@ -446,9 +474,11 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
 
             {subtasks.length === 0 && !showInput && (
               <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/50 py-14">
-                <ListTodo className="mb-3 h-10 w-10 text-muted-foreground/15" />
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/10 to-violet-500/10">
+                  <ListTodo className="h-6 w-6 text-indigo-400/50" />
+                </div>
                 <p className="text-[15px] font-semibold text-muted-foreground/50">No subtasks yet</p>
-                {canManage && <p className="mt-1 text-[13px] text-muted-foreground/30">Break this milestone into actionable steps</p>}
+                {canManage && !isApproved && <p className="mt-1 text-[13px] text-muted-foreground/30">Break this milestone into actionable steps</p>}
               </div>
             )}
 
@@ -459,11 +489,12 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
               ))}
             </div>
 
-            {showInput && (
+            {/* ── PATCH 2: hide new-subtask input row when milestone is approved ── */}
+            {showInput && !isApproved && (
               <div className="mt-3 flex gap-2.5">
                 <input
                   autoFocus
-                  className="flex-1 rounded-xl border border-orange-400/50 bg-background px-4 py-2.5 text-[14px] outline-none ring-2 ring-orange-400/15 placeholder:text-muted-foreground/30"
+                  className="flex-1 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-background px-4 py-2.5 text-[14px] outline-none ring-2 ring-indigo-400/15 placeholder:text-muted-foreground/30"
                   placeholder="What needs to be done?"
                   value={newTask}
                   onChange={e => setNewTask(e.target.value)}
@@ -473,7 +504,7 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
                   }}
                 />
                 <button onClick={addSubtask} disabled={adding || !newTask.trim()}
-                  className="flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-[13px] font-bold text-white disabled:opacity-50 hover:bg-orange-600 transition-colors">
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2.5 text-[13px] font-semibold text-white disabled:opacity-50 hover:from-indigo-600 hover:to-violet-600 transition-all shadow-sm shadow-indigo-500/20">
                   {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   Add
                 </button>
@@ -489,19 +520,22 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
           {milestone.deliverables?.length > 0 && (
             <section>
               <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800">
                   <FileText className="h-4 w-4 text-muted-foreground/60" />
                 </div>
                 <h3 className="text-[17px] font-bold">Deliverables</h3>
+                <span className="rounded-lg bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[12px] font-semibold text-muted-foreground">
+                  {milestone.deliverables.length}
+                </span>
               </div>
               <div className="space-y-2">
                 {milestone.deliverables.map((d, i) => (
-                  <div key={d.id} className="flex items-center gap-3.5 rounded-xl border border-border bg-card px-4 py-3 hover:bg-muted/30 transition-colors">
+                  <div key={d.id} className="flex items-center gap-3.5 rounded-xl border border-border bg-card px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
                       <FileText className="h-3.5 w-3.5 text-muted-foreground/50" />
                     </div>
                     <span className="flex-1 text-[14px] font-medium">{d.title}</span>
-                    <span className="text-[12px] font-bold text-muted-foreground/30">
+                    <span className="text-[12px] font-bold text-muted-foreground/25">
                       {String(i + 1).padStart(2, "0")}
                     </span>
                   </div>
@@ -557,64 +591,92 @@ function MilestoneDetail({ milestone, index, onBack, canManage, onMilestoneUpdat
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Project Dropdown
+   Generic Filter Dropdown (used for both Customer and Project)
 ───────────────────────────────────────────────────────────────────────────── */
-function ProjectDropdown({ projects, selectedId, showAll, onChange }: {
-  projects: ProjectOption[]; selectedId: number | undefined;
-  showAll: boolean; onChange: (id: number | undefined) => void;
-}) {
+interface FilterDropdownProps<T extends { id: string | number; name: string }> {
+  options: T[];
+  selectedId: T["id"] | undefined;
+  placeholder: string;
+  allLabel: string;
+  showAll?: boolean;
+  onChange: (id: T["id"] | undefined) => void;
+  icon?: React.ReactNode;
+  accentClass?: string;
+}
+
+function FilterDropdown<T extends { id: string | number; name: string }>({
+  options,
+  selectedId,
+  placeholder,
+  allLabel,
+  showAll = true,
+  onChange,
+  icon,
+}: FilterDropdownProps<T>) {
   const [open, setOpen] = useState(false);
-  const sel = projects.find(p => p.id === selectedId);
-  if (projects.length === 0) return null;
-  const canSwitch = showAll || projects.length > 1;
+  const ref = useRef<HTMLDivElement>(null);
+  const sel = options.find(o => o.id === selectedId);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <button
-        onClick={() => canSwitch && setOpen(v => !v)}
+        onClick={() => setOpen(v => !v)}
         className={cn(
-          "flex min-w-[190px] items-center gap-2.5 rounded-xl border px-4 py-2.5 text-[14px] font-semibold transition-all",
-          open ? "border-orange-400/50 bg-orange-50 dark:bg-orange-500/5 text-orange-600 dark:text-orange-400"
-               : "border-border bg-card hover:bg-muted/50",
-          !canSwitch && "cursor-default"
+          "flex min-w-[180px] items-center gap-2.5 rounded-xl border px-4 py-2.5 text-[14px] font-semibold transition-all",
+          open
+            ? "border-indigo-300 dark:border-indigo-500/40 bg-indigo-50 dark:bg-indigo-500/5 text-indigo-600 dark:text-indigo-400"
+            : "border-border bg-card hover:bg-slate-50 dark:hover:bg-slate-800/50 hover:border-slate-300 dark:hover:border-slate-600"
         )}
       >
-        <span className={cn("h-2 w-2 shrink-0 rounded-full", selectedId ? "bg-orange-500" : "bg-zinc-400")} />
+        {icon && <span className="shrink-0 text-muted-foreground/50">{icon}</span>}
         <span className="flex-1 truncate text-left">
-          {sel?.name ?? (showAll ? "All Projects" : projects[0]?.name ?? "Projects")}
+          {sel?.name ?? allLabel}
         </span>
-        {canSwitch && <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />}
+        <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground/50 transition-transform", open && "rotate-180")} />
       </button>
 
-      {open && canSwitch && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-50 mt-2 min-w-[230px] overflow-hidden rounded-2xl border border-border bg-card shadow-xl">
-            <div className="p-1.5">
-              {showAll && (
-                <>
-                  <button onClick={() => { onChange(undefined); setOpen(false); }}
-                    className={cn("flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-[14px] font-semibold transition-colors",
-                      !selectedId ? "bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" : "hover:bg-muted")}>
-                    <span className={cn("h-2 w-2 rounded-full", !selectedId ? "bg-orange-500" : "bg-transparent")} />
-                    All Projects
-                    {!selectedId && <Check className="ml-auto h-4 w-4" />}
-                  </button>
-                  <div className="my-1.5 mx-3 h-px bg-border" />
-                </>
-              )}
-              {projects.map(p => (
-                <button key={p.id} onClick={() => { onChange(p.id); setOpen(false); }}
-                  className={cn("flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-[14px] font-semibold transition-colors",
-                    selectedId === p.id ? "bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" : "hover:bg-muted")}>
-                  <span className={cn("h-2 w-2 shrink-0 rounded-full bg-orange-500", selectedId !== p.id && "opacity-25")} />
-                  <span className="flex-1 truncate text-left">{p.name}</span>
-                  {selectedId === p.id && <Check className="h-4 w-4 shrink-0" />}
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-2 min-w-[220px] overflow-hidden rounded-2xl border border-border bg-card shadow-xl shadow-black/10">
+          <div className="p-1.5 max-h-64 overflow-y-auto">
+            {showAll && (
+              <>
+                <button onClick={() => { onChange(undefined); setOpen(false); }}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-[14px] font-semibold transition-colors",
+                    !selectedId
+                      ? "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
+                      : "hover:bg-slate-50 dark:hover:bg-slate-800"
+                  )}>
+                  <span className={cn("h-2 w-2 rounded-full", !selectedId ? "bg-indigo-500" : "bg-transparent border border-border")} />
+                  <span className="flex-1 text-left">{allLabel}</span>
+                  {!selectedId && <Check className="h-4 w-4 shrink-0" />}
                 </button>
-              ))}
-            </div>
+                <div className="my-1.5 mx-3 h-px bg-border" />
+              </>
+            )}
+            {options.map(opt => (
+              <button key={opt.id} onClick={() => { onChange(opt.id as any); setOpen(false); }}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-[14px] font-semibold transition-colors",
+                  selectedId === opt.id
+                    ? "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
+                    : "hover:bg-slate-50 dark:hover:bg-slate-800"
+                )}>
+                <span className={cn("h-2 w-2 shrink-0 rounded-full", selectedId === opt.id ? "bg-indigo-500" : "bg-slate-300 dark:bg-slate-600")} />
+                <span className="flex-1 truncate text-left">{opt.name}</span>
+                {selectedId === opt.id && <Check className="h-4 w-4 shrink-0" />}
+              </button>
+            ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -623,8 +685,6 @@ function ProjectDropdown({ projects, selectedId, showAll, onChange }: {
 /* ─────────────────────────────────────────────────────────────────────────────
    Create Milestone Modal
 ───────────────────────────────────────────────────────────────────────────── */
-const inputCls = "w-full rounded-xl border border-border bg-background px-4 py-2.5 text-[14px] outline-none transition-all focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 placeholder:text-muted-foreground/30";
-
 type MilestoneForm = {
   project: number | ""; title: string; description: string;
   planned_date: string; order: string; status: string;
@@ -661,14 +721,14 @@ function MilestoneCreateModal({ preselectedProjectId, projects, onSave, onClose 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
-        <div className="h-1 bg-gradient-to-r from-orange-400 to-amber-400" />
+        <div className="h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500" />
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-[.18em] text-orange-500">New milestone</p>
+            <p className="text-[11px] font-bold uppercase tracking-[.18em] text-indigo-500">New milestone</p>
             <h2 className="mt-0.5 text-[18px] font-bold">Create milestone</h2>
           </div>
           <button type="button" onClick={onClose}
-            className="rounded-lg p-2 text-muted-foreground hover:bg-muted transition-colors">
+            className="rounded-lg p-2 text-muted-foreground hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -683,8 +743,8 @@ function MilestoneCreateModal({ preselectedProjectId, projects, onSave, onClose 
           <div>
             <label className="mb-1.5 block text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">Project *</label>
             {preName ? (
-              <div className="flex items-center gap-2.5 rounded-xl border border-border bg-muted/30 px-4 py-2.5 text-[14px]">
-                <span className="h-2 w-2 rounded-full bg-orange-500" />
+              <div className="flex items-center gap-2.5 rounded-xl border border-border bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-[14px]">
+                <FolderOpen className="h-4 w-4 text-indigo-500/60" />
                 <span className="flex-1 font-semibold">{preName}</span>
                 <span className="text-[11px] text-muted-foreground/40 font-medium">locked</span>
               </div>
@@ -738,11 +798,11 @@ function MilestoneCreateModal({ preselectedProjectId, projects, onSave, onClose 
 
           <div className="flex gap-3 border-t border-border pt-4">
             <button type="button" onClick={onClose}
-              className="flex-1 rounded-xl border border-border py-2.5 text-[14px] font-semibold text-muted-foreground hover:bg-muted transition-colors">
+              className="flex-1 rounded-xl border border-border py-2.5 text-[14px] font-semibold text-muted-foreground hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
               Cancel
             </button>
             <button type="submit" disabled={saving}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-orange-500 py-2.5 text-[14px] font-bold text-white hover:bg-orange-600 disabled:opacity-60 transition-colors">
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 py-2.5 text-[14px] font-semibold text-white hover:from-indigo-600 hover:to-violet-600 disabled:opacity-60 transition-all shadow-sm shadow-indigo-500/20">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {saving ? "Creating…" : "Create Milestone"}
             </button>
@@ -757,12 +817,17 @@ function MilestoneCreateModal({ preselectedProjectId, projects, onSave, onClose 
    Main Page
 ───────────────────────────────────────────────────────────────────────────── */
 export default function Milestones({ projectId: propProjectId }: { projectId?: number } = {}) {
-  const { user }  = useAuth();
-  const isAdmin   = user?.role === "admin";
-  const isManager = user?.role === "project_manager";
-  const canManage = isAdmin || isManager;
+  const { user } = useAuth();
+  const isAdmin         = user?.role === "admin";
+  const isManager       = user?.role === "project_manager";
+  const isCustomerAdmin = user?.role === "customer_admin";
 
+  const canManage  = isAdmin || isManager;
+  const canApprove = isAdmin || isManager;
+
+  // ── Data ──
   const [projects, setProjects]               = useState<ProjectOption[]>([]);
+  const [customers, setCustomers]             = useState<CustomerOption[]>([]);
   const [milestones, setMilestones]           = useState<Milestone[]>([]);
   const [loading, setLoading]                 = useState(true);
   const [error, setError]                     = useState<string | null>(null);
@@ -770,6 +835,25 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
   const [showCreate, setShowCreate]           = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<number | undefined>(propProjectId);
 
+  // ── Customer filter ──
+  const [activeCustomerId, setActiveCustomerId] = useState<number | string | undefined>(undefined);
+  const [customersLoading, setCustomersLoading] = useState(true);
+
+  // ── Customer-admin filter ──
+  const [customerAdmins, setCustomerAdmins]               = useState<CustomerAdminOption[]>([]);
+  const [activeCustomerAdminId, setActiveCustomerAdminId] = useState<number | undefined>(undefined);
+  const [customerAdminsLoading, setCustomerAdminsLoading] = useState(true);
+
+  // Project dropdown: narrowed to the selected customer admin's projects
+  const filteredProjects: ProjectOption[] = (() => {
+  if (!activeCustomerAdminId) return projects;
+  const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
+  if (!admin) return projects;
+  const ids = admin.project_ids ?? [];                             // guard
+  return ids.length > 0 ? projects.filter(p => ids.includes(p.id)) : projects;
+})();
+
+  // ── Load projects + customers ──
   useEffect(() => {
     milestonesService.listProjects()
       .then(ps => {
@@ -777,21 +861,69 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
         if (!propProjectId && !canManage && ps.length > 0) setActiveProjectId(ps[0].id);
       })
       .catch(() => {});
+
+    milestonesService.listCustomers()
+      .then((cs) => { if (cs?.length > 0) setCustomers(cs); })
+      .catch(() => {})
+      .finally(() => setCustomersLoading(false));
+
+    if (canManage) {
+      milestonesService.listCustomerAdmins()
+        .then((cas) => { if (cas?.length > 0) setCustomerAdmins(cas); })
+        .catch(() => {})
+        .finally(() => setCustomerAdminsLoading(false));
+    } else {
+      setCustomerAdminsLoading(false);
+    }
   }, []);
 
   useEffect(() => { setActiveProjectId(propProjectId); }, [propProjectId]);
 
-  const load = (pid?: number) => {
+  useEffect(() => {
+    if (!activeCustomerAdminId) return;
+    const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
+    if (!admin) return;
+    setActiveProjectId(prev =>
+      prev != null && admin.project_ids.includes(prev) ? prev : undefined
+    );
+  }, [activeCustomerAdminId, customerAdmins]);
+
+  const load = (pid?: number, cid?: number | string, caid?: number) => {
     setLoading(true); setError(null);
-    milestonesService.list(pid)
-      .then(setMilestones)
+    milestonesService.list(pid, cid, caid)
+      .then(res => {
+        setMilestones(Array.isArray(res) ? res : (res as any).milestones ?? []);
+      })
       .catch(() => setError("Failed to load milestones."))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(activeProjectId); }, [activeProjectId]);
+  useEffect(() => { load(activeProjectId, activeCustomerId, activeCustomerAdminId); }, [activeProjectId]);
 
-  const handleFilter   = (id: number | undefined) => { setActiveProjectId(id); setSelected(null); };
+  useEffect(() => {
+    if (!activeProjectId) {
+      load(undefined, activeCustomerId, activeCustomerAdminId);
+    }
+  }, [activeCustomerId]);
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      load(undefined, activeCustomerId, activeCustomerAdminId);
+    }
+  }, [activeCustomerAdminId]);
+
+  const handleFilterProject  = (id: number | undefined) => { setActiveProjectId(id); setSelected(null); };
+  const handleFilterCustomer = (id: number | string | undefined) => {
+    setActiveCustomerId(id);
+    setActiveProjectId(undefined);
+    setSelected(null);
+  };
+  const handleFilterCustomerAdmin = (id: number | undefined) => {
+    setActiveCustomerAdminId(id);
+    setActiveProjectId(undefined);
+    setSelected(null);
+  };
+
   const handleMUpdate  = (m: Milestone) => {
     setMilestones(p => p.map(x => x.id === m.id ? m : x));
     if (selected?.milestone.id === m.id) setSelected(p => p ? { ...p, milestone: m } : null);
@@ -816,19 +948,20 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
   const inProgress = milestones.filter(m => m.status === "in_progress").length;
   const pct        = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  /* ── States ── */
+  /* ── Loading state ── */
   if (loading) return (
     <div className="flex h-64 items-center justify-center">
       <div className="flex flex-col items-center gap-4">
         <div className="relative h-12 w-12">
-          <div className="h-12 w-12 rounded-full border-2 border-border" />
-          <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-orange-500" />
+          <div className="h-12 w-12 rounded-full border-2 border-slate-200 dark:border-slate-700" />
+          <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-indigo-500" />
         </div>
         <p className="text-[13px] font-semibold text-muted-foreground/60">Loading milestones…</p>
       </div>
     </div>
   );
 
+  /* ── Error state ── */
   if (error) return (
     <div className="flex h-64 items-center justify-center">
       <div className="flex flex-col items-center gap-4 text-center">
@@ -837,7 +970,8 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
         </div>
         <div>
           <p className="text-[15px] font-bold">{error}</p>
-          <button onClick={() => load(activeProjectId)} className="mt-1 text-[13px] font-semibold text-orange-500 hover:underline">
+          <button onClick={() => load(activeProjectId)}
+            className="mt-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 px-4 py-1.5 text-[13px] font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/15 transition-colors">
             Try again
           </button>
         </div>
@@ -860,9 +994,9 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
           {/* Title + controls row */}
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6">
             <div>
-              <div className="mb-1 flex items-center gap-2.5">
-                <div className="h-0.5 w-5 bg-orange-500" />
-                <span className="text-[11px] font-bold uppercase tracking-[.2em] text-orange-500">
+              <div className="mb-1.5 flex items-center gap-2.5">
+                <div className="h-0.5 w-5 bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full" />
+                <span className="text-[11px] font-bold uppercase tracking-[.2em] text-indigo-500">
                   Project Tracking
                 </span>
               </div>
@@ -874,14 +1008,47 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <ProjectDropdown
-                projects={projects} selectedId={activeProjectId}
-                showAll={canManage} onChange={handleFilter}
-              />
+            {/* Controls: Customer → Customer Admin → Project → New Milestone */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {!customersLoading && (
+                <FilterDropdown<CustomerOption>
+                  options={customers}
+                  selectedId={activeCustomerId}
+                  placeholder="All Customers"
+                  allLabel="All Customers"
+                  showAll={true}
+                  onChange={handleFilterCustomer}
+                  icon={<Building2 className="h-4 w-4" />}
+                />
+              )}
+
+              {canManage && !customerAdminsLoading && customerAdmins.length > 0 && (
+                <FilterDropdown<CustomerAdminOption>
+                  options={customerAdmins}
+                  selectedId={activeCustomerAdminId}
+                  placeholder="All Admins"
+                  allLabel="All Admins"
+                  showAll={true}
+                  onChange={(id) => handleFilterCustomerAdmin(id as number | undefined)}
+                  icon={<Users className="h-4 w-4" />}
+                />
+              )}
+
+              {projects.length > 0 && (
+                <FilterDropdown<ProjectOption>
+                  options={filteredProjects}
+                  selectedId={activeProjectId}
+                  placeholder="All Projects"
+                  allLabel="All Projects"
+                  showAll={canManage}
+                  onChange={(id) => handleFilterProject(id as number | undefined)}
+                  icon={<FolderOpen className="h-4 w-4" />}
+                />
+              )}
+
               {canManage && (
                 <button onClick={() => setShowCreate(true)}
-                  className="flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-[14px] font-bold text-white shadow-sm shadow-orange-500/20 transition-all hover:bg-orange-600 hover:shadow-orange-500/30">
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 text-[14px] font-semibold text-white shadow-sm shadow-indigo-500/25 transition-all hover:from-indigo-600 hover:to-violet-600 hover:shadow-indigo-500/35">
                   <Plus className="h-4 w-4" /> New Milestone
                 </button>
               )}
@@ -890,31 +1057,31 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
 
           {/* Stats row */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-4">
-            <StatCard value={total}      label="Total"       color="text-foreground"                           icon={<Layers className="h-5 w-5" />}       />
-            <StatCard value={completed}  label="Completed"   color="text-emerald-600 dark:text-emerald-400"   icon={<CheckCircle2 className="h-5 w-5 text-emerald-500" />} />
-            <StatCard value={inProgress} label="In Progress" color="text-orange-600 dark:text-orange-400"     icon={<Activity className="h-5 w-5 text-orange-500" />}     />
-            <StatCard value={delayed}    label="Delayed"     color="text-rose-600 dark:text-rose-400"         icon={<AlertTriangle className="h-5 w-5 text-rose-500" />}  />
+            <StatCard value={total}      label="Total"       color="text-foreground"                         icon={<Layers className="h-5 w-5" />} />
+            <StatCard value={completed}  label="Completed"   color="text-emerald-600 dark:text-emerald-400" icon={<CheckCircle2 className="h-5 w-5 text-emerald-500" />} />
+            <StatCard value={inProgress} label="In Progress" color="text-indigo-600 dark:text-indigo-400"   icon={<Activity className="h-5 w-5 text-indigo-500" />} />
+            <StatCard value={delayed}    label="Delayed"     color="text-rose-600 dark:text-rose-400"       icon={<AlertTriangle className="h-5 w-5 text-rose-500" />} />
           </div>
 
           {/* Progress bar */}
           {total > 0 && (
-            <div className="rounded-2xl border border-border bg-card px-6 py-4">
+            <div className="rounded-2xl border border-border bg-card px-6 py-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <BarChart3 className="h-4 w-4 text-orange-500" />
+                  <BarChart3 className="h-4 w-4 text-indigo-500" />
                   <span className="text-[14px] font-bold">Overall Progress</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-[14px] font-semibold text-muted-foreground">
                     {completed} <span className="text-muted-foreground/40">/ {total} completed</span>
                   </span>
-                  <span className="rounded-lg bg-orange-500/10 px-3 py-1 text-[14px] font-black text-orange-600 dark:text-orange-400">
+                  <span className="rounded-lg bg-gradient-to-r from-indigo-500/10 to-violet-500/10 border border-indigo-200 dark:border-indigo-500/20 px-3 py-1 text-[14px] font-black text-indigo-600 dark:text-indigo-400">
                     {pct}%
                   </span>
                 </div>
               </div>
-              <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-gradient-to-r from-orange-500 to-amber-400 transition-all duration-700"
+              <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 transition-all duration-700"
                   style={{ width: `${pct}%` }} />
               </div>
             </div>
@@ -924,8 +1091,8 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
         {/* ── Empty state ── */}
         {milestones.length === 0 && (
           <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/50 py-24">
-            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-muted/30">
-              <Flag className="h-8 w-8 text-muted-foreground/20" />
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500/10 to-violet-500/10 border border-indigo-200/50 dark:border-indigo-500/20">
+              <Flag className="h-8 w-8 text-indigo-400/40" />
             </div>
             <p className="text-[16px] font-bold text-muted-foreground/60">No milestones yet</p>
             <p className="mt-1.5 text-[14px] text-muted-foreground/40">
@@ -941,8 +1108,8 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
 
             <div className="space-y-2 pt-2">
               {milestones.map((m, i) => {
-                const st        = STATUS_MAP[m.status] ?? "pending";
-                const cfg       = S[st];
+               const st  = STATUS_MAP[m.status ?? ""] ?? "pending";
+const cfg = S[st];
                 const isActive  = st === "in-progress";
                 const pct       = progress(m);
                 const stCount   = m.subtasks?.length ?? 0;
@@ -957,7 +1124,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
                     onClick={() => setSelected({ milestone: m, index: i + 1 })}
                     className={cn(
                       "group w-full border-l-[3px] rounded-xl border border-border bg-card text-left transition-all duration-200",
-                      "hover:shadow-md hover:-translate-y-px hover:border-border/70",
+                      "hover:shadow-md hover:-translate-y-px hover:border-slate-200 dark:hover:border-slate-600",
                       cfg.card,
                       st === "cancelled" && "opacity-40",
                       isActive && "shadow-sm"
@@ -967,18 +1134,18 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
 
                       {/* Index */}
                       <div className="hidden w-8 shrink-0 sm:block">
-                        <span className="text-[13px] font-black text-muted-foreground/25">
+                        <span className="text-[13px] font-black text-muted-foreground/20">
                           {String(i + 1).padStart(2, "0")}
                         </span>
                       </div>
 
-                      {/* Status indicator */}
+                      {/* Status icon */}
                       <div className={cn(
                         "hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border sm:flex",
                         cfg.node
                       )}>
                         {st === "completed"    && <CheckCircle2 className="h-4 w-4 text-emerald-500" strokeWidth={2.5} />}
-                        {st === "in-progress"  && <Activity className="h-4 w-4 text-orange-500" strokeWidth={2} />}
+                        {st === "in-progress"  && <Activity className="h-4 w-4 text-indigo-500" strokeWidth={2} />}
                         {st === "delayed"      && <AlertTriangle className="h-4 w-4 text-rose-500" strokeWidth={2} />}
                         {(st === "pending" || st === "cancelled") && (
                           <Circle className="h-4 w-4 text-muted-foreground/30" />
@@ -989,7 +1156,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2.5 mb-1">
                           <p className="text-[15px] font-bold leading-snug">{m.title}</p>
-                          <span className={cn("rounded-lg px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide", cfg.badge)}>
+                          <span className={cn("rounded-lg px-2.5 py-0.5 text-[11px] font-semibold", cfg.badge)}>
                             {cfg.label}
                           </span>
                         </div>
@@ -1003,11 +1170,11 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
                             <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground/60">
                               <ListTodo className="h-3.5 w-3.5" />
                               {doneSt}/{stCount} subtasks
-                              {appSt > 0 && <span className="text-sky-500">· {appSt} approved</span>}
+                              {appSt > 0 && <span className="text-violet-500">· {appSt} approved</span>}
                             </span>
                           )}
                           {projLabel && (
-                            <span className="rounded-lg bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground/50">
+                            <span className="rounded-lg bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-muted-foreground/50">
                               {projLabel}
                             </span>
                           )}
@@ -1021,7 +1188,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
                             <div className="flex justify-between">
                               <span className="text-[11px] font-semibold text-muted-foreground/50">{pct}%</span>
                             </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
                               <div className={cn("h-full rounded-full", cfg.bar)} style={{ width: `${pct}%` }} />
                             </div>
                           </div>
@@ -1042,7 +1209,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
                         )}
                       </div>
 
-                      <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/20 transition-all group-hover:translate-x-0.5 group-hover:text-orange-500" />
+                      <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/20 transition-all group-hover:translate-x-0.5 group-hover:text-indigo-400" />
                     </div>
                   </button>
                 );
@@ -1056,7 +1223,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
       {selected && (
         <MilestoneDetail
           milestone={selected.milestone} index={selected.index}
-          onBack={() => setSelected(null)} canManage={canManage}
+          onBack={() => setSelected(null)} canManage={canManage} canApprove={canApprove}
           onMilestoneUpdate={handleMUpdate} onSubtaskChange={handleStChange}
         />
       )}
@@ -1064,7 +1231,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
       {/* ── Create modal ── */}
       {showCreate && canManage && (
         <MilestoneCreateModal
-          preselectedProjectId={activeProjectId} projects={projects}
+          preselectedProjectId={activeProjectId} projects={filteredProjects}
           onSave={handleCreate} onClose={() => setShowCreate(false)}
         />
       )}

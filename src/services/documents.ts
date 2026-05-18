@@ -1,5 +1,25 @@
 import api from "@/lib/api";
 
+export interface CustomerOption {
+  id: number;
+  name: string;
+}
+
+export interface CustomerAdminOption {
+  id: number;
+  name: string;
+  email: string;
+  company: string;
+  project_ids: number[];
+}
+
+export interface ProjectOption {
+  id: number;
+  name: string;
+  customer_id?: number | null;
+  customer_name?: string | null;
+}
+
 export interface Document {
   id: number;
   title: string;
@@ -55,12 +75,44 @@ export interface VersionUploadPayload {
 }
 
 export const documentsService = {
+  /**
+   * List customers accessible to the current user.
+   * Admin/PM: all customers with projects; customer roles: own record only.
+   */
+  listCustomers: async (): Promise<CustomerOption[]> => {
+    const { data } = await api.get("/milestones/customers/");
+    return data;
+  },
+
+  /**
+   * List users with role=customer_admin (admin / project_manager only).
+   */
+  listCustomerAdmins: async (): Promise<CustomerAdminOption[]> => {
+    const { data } = await api.get("/milestones/customer-admins/");
+    return data;
+  },
+
+  /**
+   * List projects accessible to the current user, preserving customer_id / customer_name.
+   */
+  listProjects: async (): Promise<ProjectOption[]> => {
+    const { data } = await api.get("/projects/", { params: { page_size: 500 } });
+    const rows: any[] = data.results ?? data;
+    return rows.map((p: any) => ({
+      id:            p.id,
+      name:          p.name,
+      customer_id:   p.customer_id   ?? p.customer   ?? null,
+      customer_name: p.customer_name ?? p.customer_display_name ?? null,
+    }));
+  },
+
   /** List documents — scoped automatically by the backend per role */
   list: async (params?: {
     category?: string;
     search?: string;
     project?: number;
     status?: string;
+    customer_admin_id?: number;
   }): Promise<Document[]> => {
     const { data } = await api.get("/documents/", { params });
     return data.results ?? data;
@@ -80,8 +132,7 @@ export const documentsService = {
 
   /**
    * Upload a new document.
-   * Max 5 MB — enforced on both frontend (guard) and backend (serializer + view).
-   * Project managers may only upload to their assigned projects.
+   * Max 5 MB — enforced on both frontend and backend.
    */
   upload: async (payload: UploadPayload): Promise<Document> => {
     const form = new FormData();
@@ -102,7 +153,7 @@ export const documentsService = {
 
   /**
    * Bump a document to a new version.
-   * Archives the current file as a DocumentVersion row, then replaces it.
+   * Archives the current file (existing becomes v1, new file becomes v2+).
    * Max 5 MB.
    */
   uploadVersion: async (id: number, payload: VersionUploadPayload): Promise<Document> => {

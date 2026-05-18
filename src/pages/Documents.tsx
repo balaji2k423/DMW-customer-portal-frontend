@@ -4,7 +4,7 @@ import {
   FileText, FileSpreadsheet, FileCode, Files, Loader2,
   AlertTriangle, Upload, Clock, RefreshCw, Trash2,
   ChevronDown, X, Check, History, Plus, FolderOpen,
-  Shield, Tag,
+  Shield, Tag, Users, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -12,11 +12,11 @@ import {
   type Document,
   type Category,
   type DocumentVersion,
+  type CustomerOption,
+  type CustomerAdminOption,
+  type ProjectOption,
 } from "@/services/documents";
-import api from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-
-interface Project { id: number; name: string; }
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Constants & helpers
@@ -69,6 +69,7 @@ const STATUS_CFG = {
 
 interface UploadModalProps {
   projectId?: number;
+  projects?: ProjectOption[];
   onClose: () => void;
   onSuccess: (doc: Document) => void;
 }
@@ -82,7 +83,7 @@ const CATEGORIES = [
   { value: "other",         label: "Other" },
 ];
 
-function UploadModal({ projectId, onClose, onSuccess }: UploadModalProps) {
+function UploadModal({ projectId, projects: propProjects, onClose, onSuccess }: UploadModalProps) {
   const [title, setTitle]         = useState("");
   const [desc, setDesc]           = useState("");
   const [category, setCategory]   = useState("other");
@@ -94,14 +95,15 @@ function UploadModal({ projectId, onClose, onSuccess }: UploadModalProps) {
   const [err, setErr]             = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Project selection — only needed when no projectId is pre-supplied
-  const [projects, setProjects]         = useState<Project[]>([]);
+  // Use externally-provided projects if available; otherwise fetch.
+  const [fetchedProjects, setFetchedProjects] = useState<ProjectOption[]>([]);
+  const projects = propProjects ?? fetchedProjects;
   const [selectedProject, setSelected] = useState<number | undefined>(projectId);
 
   useEffect(() => {
-    if (projectId) return;
-    api.get("/projects/").then(r => setProjects(r.data.results ?? r.data)).catch(() => {});
-  }, [projectId]);
+    if (projectId || propProjects) return;
+    documentsService.listProjects().then(setFetchedProjects).catch(() => {});
+  }, [projectId, propProjects]);
 
   const handleFile = (f: File) => {
     if (f.size > MAX_BYTES) { setErr(`File exceeds ${MAX_MB} MB limit.`); return; }
@@ -345,11 +347,11 @@ function VersionModal({ doc, onClose, onSuccess }: {
           <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg", fileMeta(doc.file_type).bg)}>
             <FileIcon type={doc.file_type} className={cn("h-4 w-4", fileMeta(doc.file_type).color)} strokeWidth={1.5} />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-[13px] font-bold truncate">{doc.title}</p>
             <p className="text-[11px] text-muted-foreground">
-              Current: <span className="font-mono font-bold">{doc.version}</span>
-              {" · "}Will become archived
+              Existing file: <span className="font-mono font-bold">{doc.version}</span>
+              {" "}→ will be archived · New upload becomes the active version
             </p>
           </div>
         </div>
@@ -568,14 +570,94 @@ function DeleteModal({ doc, onClose, onSuccess }: {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   Generic Filter Dropdown (Customer / Project)
+───────────────────────────────────────────────────────────────────────────── */
+
+function FilterDropdown<T extends { id: number | string; name: string }>({
+  options, selectedId, allLabel, onChange, icon,
+}: {
+  options: T[];
+  selectedId: T["id"] | undefined;
+  allLabel: string;
+  onChange: (id: T["id"] | undefined) => void;
+  icon?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const sel = options.find(o => o.id === selectedId);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  if (options.length === 0) return null;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={cn(
+          "flex min-w-[160px] items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[13px] font-semibold transition-all",
+          open || selectedId
+            ? "border-orange-300 dark:border-orange-500/40 bg-orange-50 dark:bg-orange-500/5 text-orange-600 dark:text-orange-400"
+            : "border-border bg-card hover:bg-muted/50 text-muted-foreground hover:text-foreground"
+        )}
+      >
+        {icon && <span className="shrink-0">{icon}</span>}
+        <span className="flex-1 truncate text-left">{sel?.name ?? allLabel}</span>
+        <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-2 min-w-[200px] overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-black/10">
+          <div className="p-1.5 max-h-60 overflow-y-auto">
+            <button
+              onClick={() => { onChange(undefined); setOpen(false); }}
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors",
+                !selectedId ? "bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" : "hover:bg-muted"
+              )}
+            >
+              <span className={cn("h-1.5 w-1.5 rounded-full", !selectedId ? "bg-orange-500" : "bg-border")} />
+              <span className="flex-1 text-left">{allLabel}</span>
+              {!selectedId && <Check className="h-3.5 w-3.5 shrink-0" />}
+            </button>
+            <div className="my-1 mx-2 h-px bg-border" />
+            {options.map(opt => (
+              <button
+                key={opt.id}
+                onClick={() => { onChange(opt.id as any); setOpen(false); }}
+                className={cn(
+                  "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors",
+                  selectedId === opt.id ? "bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" : "hover:bg-muted"
+                )}
+              >
+                <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", selectedId === opt.id ? "bg-orange-500" : "bg-muted-foreground/30")} />
+                <span className="flex-1 truncate text-left">{opt.name}</span>
+                {selectedId === opt.id && <Check className="h-3.5 w-3.5 shrink-0" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    Row action menu
 ───────────────────────────────────────────────────────────────────────────── */
 
-function ActionMenu({ doc, canManage, downloading, onDownload, onPreview, onVersion, onHistory, onDelete }: {
+function ActionMenu({ doc, canManage, downloading, onDownload, onPreview, onVersion, onHistory, onDelete, onUpdate }: {
   doc: Document; canManage: boolean; downloading: boolean;
   onDownload: () => void; onPreview: () => void;
   onVersion: () => void; onHistory: () => void;
   onDelete: () => void;
+  onUpdate: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -616,9 +698,14 @@ function ActionMenu({ doc, canManage, downloading, onDownload, onPreview, onVers
               {canManage && (
                 <>
                   <div className="my-1 mx-2 h-px bg-border" />
+                  <button onClick={() => { onUpdate(); setOpen(false); }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-[13px] font-medium text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-500/10 transition-colors">
+                    <RefreshCw className="h-4 w-4" />
+                    Update (new version)
+                  </button>
                   <button onClick={() => { onVersion(); setOpen(false); }}
                     className="flex w-full items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-[13px] font-medium hover:bg-muted transition-colors">
-                    <RefreshCw className="h-4 w-4 text-sky-500" />
+                    <History className="h-4 w-4 text-sky-500" />
                     Upload New Version
                   </button>
                   <button onClick={() => { onDelete(); setOpen(false); }}
@@ -652,6 +739,89 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
   const [query, setQuery]             = useState("");
   const [view, setView]               = useState<"list" | "grid">("list");
 
+  // ── Customer / Project filters ──
+  const [allProjects, setAllProjects]         = useState<ProjectOption[]>([]);
+  const [customers, setCustomers]             = useState<CustomerOption[]>([]);
+  const [activeCustomerId, setActiveCustomerId] = useState<number | undefined>(undefined);
+  const [activeProjectId, setActiveProjectId]   = useState<number | undefined>(undefined);
+
+  // ── Customer-admin filter ──
+  const [customerAdmins, setCustomerAdmins]               = useState<CustomerAdminOption[]>([]);
+  const [activeCustomerAdminId, setActiveCustomerAdminId] = useState<number | undefined>(undefined);
+
+  // Projects scoped to the selected customer admin (derived from project_ids in the admin record)
+  const filteredProjects: ProjectOption[] = (() => {
+    let base = allProjects;
+    if (activeCustomerAdminId) {
+      const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
+      if (admin) base = base.filter(p => admin.project_ids.includes(p.id));
+    }
+    if (!activeCustomerId) return base;
+    return base.filter(p =>
+      p.customer_id != null
+        ? p.customer_id === activeCustomerId
+        : p.customer_name === customers.find(c => c.id === activeCustomerId)?.name
+    );
+  })();
+
+  // Load customers + projects once on mount (skip if scoped to a specific project)
+  useEffect(() => {
+    if (projectId) return;
+    documentsService.listProjects()
+      .then(ps => {
+        setAllProjects(ps);
+        // Derive customers from projects as fallback
+        const seen = new Map<number | string, CustomerOption>();
+        ps.forEach((p: any) => {
+          const cId   = p.customer_id ?? null;
+          const cName = p.customer_name ?? null;
+          if (!cName) return;
+          const key = cId ?? cName;
+          if (!seen.has(key)) seen.set(key, { id: cId ?? cName, name: cName });
+        });
+        if (seen.size > 0)
+          setCustomers(Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)));
+      })
+      .catch(() => {});
+
+    // Try dedicated customers endpoint (may 403 for customer roles — ignored)
+    documentsService.listCustomers()
+      .then(cs => { if (cs.length > 0) setCustomers(cs); })
+      .catch(() => {});
+
+    // Customer admins — admin / project_manager only
+    if (canManage) {
+      documentsService.listCustomerAdmins()
+        .then(cas => { if (cas.length > 0) setCustomerAdmins(cas); })
+        .catch(() => {});
+    }
+  }, [projectId]);
+
+  // When customer changes, reset project if it no longer belongs to that customer
+  useEffect(() => {
+    if (!activeCustomerId) return;
+    setActiveProjectId(prev => {
+      if (prev == null) return prev;
+      const stillValid = allProjects.some(p => {
+        const match = p.customer_id != null
+          ? p.customer_id === activeCustomerId
+          : p.customer_name === customers.find(c => c.id === activeCustomerId)?.name;
+        return match && p.id === prev;
+      });
+      return stillValid ? prev : undefined;
+    });
+  }, [activeCustomerId, allProjects, customers]);
+
+  // When customer admin changes, reset project if it's no longer in their project list
+  useEffect(() => {
+    if (!activeCustomerAdminId) return;
+    const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
+    if (!admin) return;
+    setActiveProjectId(prev =>
+      prev != null && admin.project_ids.includes(prev) ? prev : undefined
+    );
+  }, [activeCustomerAdminId, customerAdmins]);
+
   const [showUpload, setShowUpload]         = useState(false);
   const [versionDoc, setVersionDoc]         = useState<Document | null>(null);
   const [historyDoc, setHistoryDoc]         = useState<Document | null>(null);
@@ -659,8 +829,12 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
 
   const load = () => {
     setLoading(true);
+    const proj = projectId ?? activeProjectId;
+    const params: Parameters<typeof documentsService.list>[0] = {};
+    if (proj) params.project = proj;
+    if (activeCustomerAdminId) params.customer_admin_id = activeCustomerAdminId;
     Promise.all([
-      documentsService.list(projectId ? { project: projectId } : undefined),
+      documentsService.list(Object.keys(params).length ? params : undefined),
       documentsService.categories(),
     ])
       .then(([docs, cats]) => { setDocuments(docs); setCategories(cats); })
@@ -668,7 +842,7 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [projectId]);
+  useEffect(load, [projectId, activeProjectId, activeCustomerAdminId]);
 
   const filtered = useMemo(() => {
     return documents.filter(d => {
@@ -732,7 +906,43 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Customer filter — only shown when not scoped to a single project */}
+          {!projectId && customers.length > 0 && (
+            <FilterDropdown<CustomerOption>
+              options={customers}
+              selectedId={activeCustomerId}
+              allLabel="All Customers"
+              onChange={id => { setActiveCustomerId(id as number | undefined); }}
+              icon={<Users className="h-3.5 w-3.5" />}
+            />
+          )}
+
+          {/* Customer Admin filter — admin / project_manager only */}
+          {!projectId && canManage && customerAdmins.length > 0 && (
+            <FilterDropdown<CustomerAdminOption>
+              options={customerAdmins}
+              selectedId={activeCustomerAdminId}
+              allLabel="All Admins"
+              onChange={id => {
+                setActiveCustomerAdminId(id as number | undefined);
+                setActiveProjectId(undefined);
+              }}
+              icon={<Building2 className="h-3.5 w-3.5" />}
+            />
+          )}
+
+          {/* Project filter */}
+          {!projectId && filteredProjects.length > 0 && (
+            <FilterDropdown<ProjectOption>
+              options={filteredProjects}
+              selectedId={activeProjectId}
+              allLabel="All Projects"
+              onChange={id => setActiveProjectId(id as number | undefined)}
+              icon={<FolderOpen className="h-3.5 w-3.5" />}
+            />
+          )}
+
           {canManage && (
             <button onClick={() => setShowUpload(true)}
               className="flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-[14px] font-bold text-white shadow-sm shadow-orange-500/20 transition-all hover:bg-orange-600">
@@ -891,6 +1101,7 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
                         onVersion={() => setVersionDoc(d)}
                         onHistory={() => setHistoryDoc(d)}
                         onDelete={() => setDeleteDoc(d)}
+                        onUpdate={() => setVersionDoc(d)}
                       />
                     </div>
                   </div>
@@ -952,19 +1163,20 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
                     <span className="flex-1 truncate text-[11px] text-muted-foreground">{d.uploaded_by_name}</span>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button onClick={() => d.file_url && window.open(d.file_url, "_blank")}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors">
+                        className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Preview">
                         <Eye className="h-3.5 w-3.5 text-muted-foreground" />
                       </button>
                       <button onClick={() => handleDownload(d)} disabled={downloading === d.id}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors">
+                        className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors" title="Download">
                         {downloading === d.id
                           ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                           : <Download className="h-3.5 w-3.5 text-muted-foreground" />}
                       </button>
                       {canManage && (
                         <button onClick={() => setVersionDoc(d)}
-                          className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-muted transition-colors">
-                          <RefreshCw className="h-3.5 w-3.5 text-sky-500" />
+                          className="flex h-7 items-center gap-1 rounded-lg bg-orange-50 dark:bg-orange-500/10 px-2 hover:bg-orange-100 dark:hover:bg-orange-500/20 transition-colors" title="Update — upload new version">
+                          <RefreshCw className="h-3.5 w-3.5 text-orange-500" />
+                          <span className="text-[10px] font-bold text-orange-600 dark:text-orange-400">Update</span>
                         </button>
                       )}
                     </div>
@@ -980,6 +1192,7 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
       {showUpload && (
         <UploadModal
           projectId={projectId}
+          projects={projectId ? undefined : filteredProjects}
           onClose={() => setShowUpload(false)}
           onSuccess={doc => { setDocuments(p => [doc, ...p]); setShowUpload(false); }}
         />

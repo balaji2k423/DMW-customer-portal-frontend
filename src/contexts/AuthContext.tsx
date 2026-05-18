@@ -6,7 +6,6 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { useNavigate } from "react-router-dom";
 import { authService } from "@/services/auth";
 
 interface User {
@@ -32,7 +31,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser]       = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const navigate              = useNavigate();
+  // ✅ No useNavigate here — AuthProvider can now safely live outside BrowserRouter
 
   // ── On mount: restore session from stored access token ──────────────────
   useEffect(() => {
@@ -46,9 +45,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .getProfile()
       .then(setUser)
       .catch(() => {
-        // Token is expired / invalid — clear storage silently.
-        // The api.ts interceptor will have already attempted a refresh;
-        // if we reach here, both tokens are gone and the user must log in.
         localStorage.removeItem("access");
         localStorage.removeItem("refresh");
         setUser(null);
@@ -56,26 +52,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // ── Login ────────────────────────────────────────────────────────────────
+  // ── Login — just sets state, caller handles navigation ──────────────────
   const login = useCallback(async (email: string, password: string) => {
     await authService.login(email, password);
     const profile = await authService.getProfile();
     setUser(profile);
-    navigate("/", { replace: true });
-  }, [navigate]);
+    // ✅ Removed: navigate("/", { replace: true })
+    //    → call navigate() in your Login page component after awaiting login()
+  }, []);
 
-  // ── Logout ───────────────────────────────────────────────────────────────
-  // async so the server blacklist call completes before we clear state.
-  // We do NOT call authService.logout() here because that does its own
-  // window.location.href redirect which conflicts with React Router's
-  // navigate(). Instead we inline the logic and use navigate().
+  // ── Logout — just clears state, caller handles navigation ───────────────
   const logout = useCallback(async () => {
     const refresh = localStorage.getItem("refresh");
     const access  = localStorage.getItem("access");
 
     if (refresh) {
       try {
-        // Blacklist the refresh token on the server
         const { default: api } = await import("@/lib/api");
         await api.post(
           "/auth/logout/",
@@ -90,8 +82,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("access");
     localStorage.removeItem("refresh");
     setUser(null);
-    navigate("/login", { replace: true });
-  }, [navigate]);
+    // ✅ Removed: navigate("/login", { replace: true })
+    //    → call navigate() in your logout handler after awaiting logout()
+  }, []);
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout }}>

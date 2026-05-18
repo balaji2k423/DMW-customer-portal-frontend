@@ -9,8 +9,8 @@ import {
   ChevronRight,
   Briefcase,
   Users,
-  FolderPlus,
   ShieldCheck,
+  Building2,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Logo } from "@/components/Logo";
@@ -30,9 +30,9 @@ const items = [
 ];
 
 const adminItems = [
-  { title: "Projects",     url: "/admin/projects",   icon: Briefcase },
-  { title: "Users",        url: "/admin/users",      icon: Users },
- 
+  { title: "Projects",        url: "/admin/projects", icon: Briefcase },
+  { title: "Users",           url: "/admin/users",    icon: Users },
+  { title: "Company Master",  url: "/admin/company",  icon: Building2 },
 ];
 
 function NavItem({
@@ -98,7 +98,9 @@ export function AppSidebar() {
   const unreadNotifs = useNotificationCount();
   const openTickets  = useTicketCount();
 
-  const isAdmin = user?.role === "admin";
+  const isAdmin   = user?.role === "admin";
+  const isManager = user?.role === "project_manager";
+  const showAdmin = isAdmin || isManager;
 
   const badges: Record<string, number> = {
     Notifications:     unreadNotifs,
@@ -147,7 +149,7 @@ export function AppSidebar() {
           </ul>
 
           {/* Admin section */}
-          {isAdmin && (
+          {showAdmin && (
             <div className="mt-4">
               <div className="mb-2 px-1">
                 {isHovered ? (

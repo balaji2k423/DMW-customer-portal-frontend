@@ -1,44 +1,28 @@
 /**
  * NewTicketModal.tsx
  *
- * "Raise New Ticket" modal for customers.
- *  - Fetches only the projects that belong to the logged-in customer
- *  - Image  ≤ 2 MB  (jpeg / png / gif / webp)
- *  - Video  ≤ 10 MB (mp4 / webm / mov)
- *  - Admin / project_manager roles cannot open this modal at all
- *    (the "Raise new ticket" button is hidden in Tickets.tsx for those roles)
+ * Step 1 → pick Customer  (GET /projects/customers/)
+ * Step 2 → pick Project   (GET /projects/?customer=<id>)
+ * Step 3 → fill details   (POST /tickets/)
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
-  X, Plus, Paperclip, Loader2, AlertTriangle,
-  ChevronDown, Image, Film, Trash2,
+  X, ChevronDown, Loader2, AlertTriangle,
+  Tag, Flag, AlignLeft, Building2, FolderKanban,
+  TicketIcon, CheckCircle2, Users,
 } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/contexts/AuthContext";
-import { ticketsService } from "@/services/tickets";
-import { useAdminProjects } from "@/hooks/UseAdminProjects";  // ← real hook
-import { notificationsService } from "@/services/notifications"; // ← real service
 import { cn } from "@/lib/utils";
+import api from "@/lib/api";
+import { ticketsService } from "@/services/tickets";
+import { useToast } from "@/hooks/use-toast";
 
-/* ── Types ─────────────────────────────────────────────────────────────────── */
-interface AttachedFile {
-  file: File;
-  kind: "image" | "video" | "other";
-  preview?: string;         // object-URL for images
-  error?: string;           // validation message
-}
+/* ─── Types ──────────────────────────────────────────────────────────────────── */
+interface Customer { id: number; full_name: string; email: string; }
+interface Project   { id: number; name: string; }
+interface Props     { open: boolean; onClose: () => void; onCreated: () => void; }
 
-interface Props {
-  open: boolean;
-  onClose: () => void;
-  onCreated?: () => void;   // called after a ticket is successfully created
-}
-
-/* ── Constants ─────────────────────────────────────────────────────────────── */
-const IMAGE_MAX  = 2  * 1024 * 1024;   // 2 MB
-const VIDEO_MAX  = 10 * 1024 * 1024;   // 10 MB
-
+/* ─── Static options ─────────────────────────────────────────────────────────── */
 const CATEGORIES = [
   { value: "technical",    label: "Technical" },
   { value: "commercial",   label: "Commercial" },
@@ -47,376 +31,438 @@ const CATEGORIES = [
   { value: "other",        label: "Other" },
 ];
 
-const PRIORITIES = [
-  { value: "low",      label: "Low",      color: "text-zinc-500" },
-  { value: "medium",   label: "Medium",   color: "text-amber-600" },
-  { value: "high",     label: "High",     color: "text-orange-600" },
-  { value: "critical", label: "Critical", color: "text-rose-600" },
+const PRIORITIES: { value: string; label: string; dot: string; active: string }[] = [
+  { value: "low",      label: "Low",      dot: "bg-zinc-400",   active: "border-zinc-300 dark:border-zinc-600 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300" },
+  { value: "medium",   label: "Medium",   dot: "bg-amber-400",  active: "border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400" },
+  { value: "high",     label: "High",     dot: "bg-orange-500", active: "border-orange-300 dark:border-orange-500/40 bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-400" },
+  { value: "critical", label: "Critical", dot: "bg-rose-500",   active: "border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400" },
 ];
 
-/* ── Helpers ───────────────────────────────────────────────────────────────── */
-function fileKind(f: File): "image" | "video" | "other" {
-  if (f.type.startsWith("image/")) return "image";
-  if (f.type.startsWith("video/")) return "video";
-  return "other";
+/* ─── Tiny sub-components ────────────────────────────────────────────────────── */
+function FieldLabel({ children, req }: { children: React.ReactNode; req?: boolean }) {
+  return (
+    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-[.14em] text-muted-foreground/55">
+      {children}{req && <span className="ml-0.5 text-rose-500">*</span>}
+    </p>
+  );
 }
 
-function validateFile(f: File): string | undefined {
-  const kind = fileKind(f);
-  if (kind === "image" && f.size > IMAGE_MAX) return `Images must be ≤ 2 MB (this file is ${(f.size / 1048576).toFixed(1)} MB)`;
-  if (kind === "video" && f.size > VIDEO_MAX) return `Videos must be ≤ 10 MB (this file is ${(f.size / 1048576).toFixed(1)} MB)`;
-  return undefined;
+function SelectBox({
+  value, onChange, disabled, placeholder, loading, children,
+}: {
+  value: string | number; onChange: (v: string) => void;
+  disabled?: boolean; placeholder?: string; loading?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled || loading}
+        className={cn(
+          "w-full appearance-none rounded-xl border border-border bg-background",
+          "px-4 py-2.5 pr-9 text-[13.5px] font-medium outline-none transition-all",
+          "focus:border-orange-400/70 focus:ring-2 focus:ring-orange-400/10",
+          "disabled:cursor-not-allowed disabled:opacity-45",
+          !value && "text-muted-foreground/35",
+        )}
+      >
+        {placeholder && <option value="" disabled hidden>{placeholder}</option>}
+        {children}
+      </select>
+      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/40">
+        {loading
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <ChevronDown className="h-3.5 w-3.5" />}
+      </span>
+    </div>
+  );
 }
 
-function fmtSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
+function StepBadge({ n, done, active }: { n: number; done: boolean; active: boolean }) {
+  return (
+    <div className={cn(
+      "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[12px] font-black transition-all duration-300",
+      done   ? "bg-emerald-500 text-white shadow shadow-emerald-500/25"
+             : active
+               ? "bg-orange-500 text-white shadow shadow-orange-500/30"
+               : "border border-border bg-muted/60 text-muted-foreground/35",
+    )}>
+      {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : n}
+    </div>
+  );
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   Component
-───────────────────────────────────────────────────────────────────────────── */
+function ErrBox({ msg }: { msg: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-rose-200 dark:border-rose-500/25 bg-rose-50 dark:bg-rose-500/10 px-4 py-2.5">
+      <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
+      <span className="text-[13px] font-semibold text-rose-600 dark:text-rose-400">{msg}</span>
+    </div>
+  );
+}
+
+/* ─── Main modal ─────────────────────────────────────────────────────────────── */
 export default function NewTicketModal({ open, onClose, onCreated }: Props) {
-  const { user }  = useAuth();
   const { toast } = useToast();
-  const fileRef    = useRef<HTMLInputElement>(null);
-  const overlayRef = useRef<HTMLDivElement>(null);
 
-  /* ── Form state ── */
+  const [customers,   setCustomers]   = useState<Customer[]>([]);
+  const [projects,    setProjects]    = useState<Project[]>([]);
+  const [loadingC,    setLoadingC]    = useState(false);
+  const [loadingP,    setLoadingP]    = useState(false);
+  const [errC,        setErrC]        = useState(false);
+  const [errP,        setErrP]        = useState(false);
+
+  const [customerId,  setCustomerId]  = useState("");
+  const [projectId,   setProjectId]   = useState("");
   const [subject,     setSubject]     = useState("");
   const [description, setDescription] = useState("");
   const [category,    setCategory]    = useState("technical");
   const [priority,    setPriority]    = useState("medium");
-  const [projectId,   setProjectId]   = useState<number | "">("");
-  const [files,       setFiles]       = useState<AttachedFile[]>([]);
   const [submitting,  setSubmitting]  = useState(false);
+  const [submitted,   setSubmitted]   = useState(false);
 
-  /* ── Projects via React Query (replaces manual useEffect + fetch) ── */
-  const { data: projects = [], isLoading: loadingProjects } = useAdminProjects();
-
-  /* ── Close on overlay click ── */
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === overlayRef.current) onClose();
-  };
-
-  /* ── Close on Escape ── */
+  /* load customers when modal opens */
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    if (open) document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+    if (!open) return;
+    setCustomers([]); setProjects([]);
+    setCustomerId(""); setProjectId("");
+    setSubject(""); setDescription("");
+    setCategory("technical"); setPriority("medium");
+    setSubmitted(false); setErrC(false); setErrP(false);
 
-  /* ── Reset on close ── */
-  useEffect(() => {
-    if (!open) {
-      setSubject(""); setDescription(""); setCategory("technical");
-      setPriority("medium"); setProjectId(""); setFiles([]);
-    }
+    setLoadingC(true);
+    api.get("/projects/customers/")
+      .then(r => setCustomers(r.data?.results ?? r.data ?? []))
+      .catch(() => setErrC(true))
+      .finally(() => setLoadingC(false));
   }, [open]);
 
-  /* ── File picker ── */
-  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = Array.from(e.target.files ?? []);
-    const newEntries: AttachedFile[] = picked.map(f => {
-      const kind    = fileKind(f);
-      const error   = validateFile(f);
-      const preview = (kind === "image" && !error) ? URL.createObjectURL(f) : undefined;
-      return { file: f, kind, preview, error };
-    });
-    setFiles(prev => [...prev, ...newEntries]);
-    if (fileRef.current) fileRef.current.value = "";
-  };
+  /* load projects filtered by customer */
+  const handleCustomerChange = useCallback((cid: string) => {
+    setCustomerId(cid);
+    setProjectId("");
+    setProjects([]);
+    if (!cid) return;
+    setLoadingP(true);
+    setErrP(false);
+    api.get("/projects/", { params: { customer: cid } })
+      .then(r => setProjects(r.data?.results ?? r.data ?? []))
+      .catch(() => setErrP(true))
+      .finally(() => setLoadingP(false));
+  }, []);
 
-  const removeFile = (idx: number) => {
-    setFiles(prev => {
-      const copy = [...prev];
-      if (copy[idx].preview) URL.revokeObjectURL(copy[idx].preview!);
-      copy.splice(idx, 1);
-      return copy;
-    });
-  };
-
-  const hasInvalidFiles = files.some(f => !!f.error);
-
-  /* ── Submit ── */
   const handleSubmit = async () => {
-    if (!subject.trim() || !projectId) return;
-    if (hasInvalidFiles) return;
-
+    if (!projectId || !subject.trim()) return;
     setSubmitting(true);
     try {
-      // 1. Create ticket
-      const ticket = await ticketsService.create({
-        project:     projectId as number,
-        subject:     subject.trim(),
+      await ticketsService.create({
+        project: Number(projectId),
+        subject: subject.trim(),
         description: description.trim(),
         category,
         priority,
       });
-
-      // 2. Upload valid attachments sequentially
-      const validFiles = files.filter(f => !f.error);
-      for (const af of validFiles) {
-        try {
-          await ticketsService.uploadAttachment(ticket.id, af.file);
-        } catch {
-          toast({ title: `Failed to upload ${af.file.name}`, variant: "destructive" });
-        }
-      }
-
-      // 3. Notify admins / project managers (best-effort)
-      //    notificationsService has no `send()` — backend fires Django signals
-      //    automatically on ticket creation, so no client call is needed here.
-
-      toast({ title: "Ticket raised successfully", description: ticket.ticket_id });
-      onCreated?.();
-      onClose();
-    } catch (err: any) {
-      toast({
-        title:       "Failed to raise ticket",
-        description: err?.message ?? "Please try again.",
-        variant:     "destructive",
-      });
+      setSubmitted(true);
+      toast({ title: "Ticket raised successfully" });
+      setTimeout(onCreated, 1400);
+    } catch {
+      toast({ title: "Failed to create ticket", variant: "destructive" });
     } finally {
       setSubmitting(false);
     }
   };
 
+  const s1Done  = !!customerId;
+  const s2Done  = !!projectId;
+  const canSend = s2Done && subject.trim().length >= 3;
+  const selCust = customers.find(c => String(c.id) === customerId);
+  const selProj = projects.find(p => String(p.id) === projectId);
+
   if (!open) return null;
 
-  /* ─────────────────────────────────────────────────────────────────────────
-     Render
-  ───────────────────────────────────────────────────────────────────────── */
   return (
     <div
-      ref={overlayRef}
-      onClick={handleOverlayClick}
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center font-mono"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[3px] sm:items-center sm:p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="relative w-full max-w-2xl max-h-[95dvh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-border bg-background shadow-2xl animate-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-200">
+      <div className={cn(
+        "font-mono relative flex w-full max-w-2xl flex-col overflow-hidden",
+        "rounded-t-2xl sm:rounded-2xl border border-border bg-background shadow-2xl",
+        "max-h-[94dvh]",
+      )}>
 
-        {/* ── Header ── */}
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/95 backdrop-blur px-6 py-4">
-          <div>
-            <div className="mb-0.5 flex items-center gap-2">
-              <div className="h-0.5 w-4 bg-orange-500" />
-              <span className="text-[10px] font-bold uppercase tracking-[.2em] text-orange-500">Engineering Support</span>
-            </div>
-            <h2 className="text-[18px] font-black tracking-tight leading-none">Raise New Ticket</h2>
+        {/* top accent */}
+        <div className="h-[3px] w-full shrink-0 bg-gradient-to-r from-orange-500 via-amber-400 to-orange-600" />
+
+        {/* header */}
+        <div className="flex shrink-0 items-center gap-3 border-b border-border px-5 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-orange-200 dark:border-orange-500/30 bg-orange-50 dark:bg-orange-500/10">
+            <TicketIcon className="h-4 w-4 text-orange-500" strokeWidth={2} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-[15px] font-black leading-tight">Raise a Support Ticket</h2>
+            <p className="mt-0.5 text-[12px] font-medium text-muted-foreground/50 truncate">
+              Engineering team responds within your SLA window.
+            </p>
           </div>
           <button
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground/40 transition-all hover:bg-muted/50 hover:text-foreground"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* ── Body ── */}
-        <div className="space-y-5 px-6 py-5">
+        {/* step bar */}
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/20 px-5 py-2.5">
+          <StepBadge n={1} done={s1Done} active={!s1Done} />
+          <div className={cn("h-px flex-1 transition-all duration-500", s1Done ? "bg-orange-400/50" : "bg-border")} />
+          <StepBadge n={2} done={s2Done} active={s1Done && !s2Done} />
+          <div className={cn("h-px flex-1 transition-all duration-500", s2Done ? "bg-orange-400/50" : "bg-border")} />
+          <StepBadge n={3} done={submitted} active={s2Done && !submitted} />
+          <p className="ml-3 w-36 shrink-0 text-[11px] font-bold tracking-wide text-muted-foreground/50">
+            {!s1Done ? "Select customer" : !s2Done ? "Select project" : submitted ? "Ticket raised!" : "Fill in details"}
+          </p>
+        </div>
 
-          {/* Project selector */}
-          <div>
-            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/60">
-              Project <span className="text-rose-500">*</span>
-            </label>
+        {/* ── Success state ── */}
+        {submitted ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-5 py-20">
             <div className="relative">
-              <select
-                value={projectId}
-                onChange={e => setProjectId(Number(e.target.value))}
-                disabled={loadingProjects}
+              <div className="flex h-20 w-20 items-center justify-center rounded-2xl border-2 border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10">
+                <CheckCircle2 className="h-10 w-10 text-emerald-500" strokeWidth={1.5} />
+              </div>
+              <div className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500">
+                <span className="text-[9px] font-black text-white">✓</span>
+              </div>
+            </div>
+            <div className="space-y-1 text-center">
+              <p className="text-[20px] font-black">Ticket submitted!</p>
+              <p className="text-[13px] text-muted-foreground/55">We'll be in touch within your SLA window.</p>
+            </div>
+          </div>
+        ) : (
+
+        /* ── Form body ── */
+        <div className="flex-1 overflow-y-auto">
+          <div className="space-y-5 p-5">
+
+            {/* Block 1: Customer & Project */}
+            <div className="overflow-hidden rounded-xl border border-border bg-card">
+              <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-2.5">
+                <Building2 className="h-3.5 w-3.5 text-orange-500/70" strokeWidth={1.75} />
+                <span className="text-[10.5px] font-bold uppercase tracking-[.16em] text-muted-foreground/55">
+                  Customer &amp; Project
+                </span>
+              </div>
+              <div className="grid gap-4 p-4 sm:grid-cols-2">
+
+                {/* Customer */}
+                <div>
+                  <FieldLabel req>
+                    <Users className="inline h-3 w-3 mr-1 -mt-px opacity-60" />Customer
+                  </FieldLabel>
+                  {errC
+                    ? <ErrBox msg="Failed to load customers" />
+                    : (
+                      <SelectBox
+                        value={customerId}
+                        onChange={handleCustomerChange}
+                        placeholder="— Select customer —"
+                        loading={loadingC}
+                      >
+                        {customers.map(c => (
+                          <option key={c.id} value={String(c.id)}>{c.full_name}</option>
+                        ))}
+                      </SelectBox>
+                    )
+                  }
+                  {selCust && (
+                    <p className="mt-1.5 truncate pl-1 text-[11px] font-medium text-muted-foreground/45">
+                      {selCust.email}
+                    </p>
+                  )}
+                </div>
+
+                {/* Project */}
+                <div>
+                  <FieldLabel req>
+                    <FolderKanban className="inline h-3 w-3 mr-1 -mt-px opacity-60" />Project
+                  </FieldLabel>
+                  {errP
+                    ? <ErrBox msg="Failed to load projects" />
+                    : (
+                      <SelectBox
+                        value={projectId}
+                        onChange={setProjectId}
+                        placeholder={
+                          !customerId              ? "— Select a customer first —"
+                          : loadingP               ? "Loading…"
+                          : projects.length === 0  ? "— No projects found —"
+                          : "— Select project —"
+                        }
+                        disabled={!customerId || (projects.length === 0 && !loadingP)}
+                        loading={loadingP}
+                      >
+                        {projects.map(p => (
+                          <option key={p.id} value={String(p.id)}>{p.name}</option>
+                        ))}
+                      </SelectBox>
+                    )
+                  }
+                  {selProj && (
+                    <p className="mt-1.5 flex items-center gap-1.5 pl-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      {selProj.name}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Block 2: Details (locked until project selected) */}
+            <div className={cn(
+              "overflow-hidden rounded-xl border border-border bg-card transition-opacity duration-300",
+              !s2Done && "pointer-events-none select-none opacity-35",
+            )}>
+              <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-2.5">
+                <AlignLeft className="h-3.5 w-3.5 text-orange-500/70" strokeWidth={1.75} />
+                <span className="text-[10.5px] font-bold uppercase tracking-[.16em] text-muted-foreground/55">
+                  Ticket Details
+                </span>
+                {!s2Done && (
+                  <span className="ml-auto text-[10px] font-semibold text-muted-foreground/35">
+                    Complete steps 1 &amp; 2 first
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-4 p-4">
+
+                {/* Subject */}
+                <div>
+                  <FieldLabel req>Subject</FieldLabel>
+                  <input
+                    type="text"
+                    value={subject}
+                    onChange={e => setSubject(e.target.value)}
+                    placeholder="Brief one-line description of the issue…"
+                    maxLength={255}
+                    className={cn(
+                      "w-full rounded-xl border border-border bg-background",
+                      "px-4 py-2.5 text-[13.5px] font-medium outline-none transition-all",
+                      "placeholder:text-muted-foreground/30",
+                      "focus:border-orange-400/70 focus:ring-2 focus:ring-orange-400/10",
+                    )}
+                  />
+                  <div className="mt-1 flex items-center justify-between px-0.5">
+                    {subject.trim().length > 0 && subject.trim().length < 3 && (
+                      <p className="text-[11px] font-semibold text-rose-500">Minimum 3 characters</p>
+                    )}
+                    <p className={cn(
+                      "ml-auto text-[11px] tabular-nums text-muted-foreground/30",
+                      subject.length > 230 && "text-rose-400",
+                    )}>
+                      {subject.length}/255
+                    </p>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <FieldLabel>Description</FieldLabel>
+                  <textarea
+                    value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    placeholder="Steps to reproduce · expected vs actual behaviour · any error messages…"
+                    rows={4}
+                    className={cn(
+                      "w-full resize-none rounded-xl border border-border bg-background",
+                      "px-4 py-2.5 text-[13.5px] font-medium leading-relaxed outline-none transition-all",
+                      "placeholder:text-muted-foreground/30",
+                      "focus:border-orange-400/70 focus:ring-2 focus:ring-orange-400/10",
+                    )}
+                  />
+                </div>
+
+                {/* Category + Priority */}
+                <div className="grid gap-4 sm:grid-cols-2">
+
+                  <div>
+                    <FieldLabel>
+                      <Tag className="inline h-3 w-3 mr-1 -mt-px opacity-60" />Category
+                    </FieldLabel>
+                    <SelectBox value={category} onChange={setCategory}>
+                      {CATEGORIES.map(c => (
+                        <option key={c.value} value={c.value}>{c.label}</option>
+                      ))}
+                    </SelectBox>
+                  </div>
+
+                  <div>
+                    <FieldLabel>
+                      <Flag className="inline h-3 w-3 mr-1 -mt-px opacity-60" />Priority
+                    </FieldLabel>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {PRIORITIES.map(p => (
+                        <button
+                          key={p.value}
+                          type="button"
+                          onClick={() => setPriority(p.value)}
+                          className={cn(
+                            "flex flex-col items-center gap-1 rounded-xl border py-2 text-[10px] font-bold uppercase tracking-wide transition-all",
+                            priority === p.value
+                              ? p.active
+                              : "border-border bg-background text-muted-foreground/40 hover:bg-muted/40 hover:text-foreground",
+                          )}
+                        >
+                          <span className={cn("h-1.5 w-1.5 rounded-full", p.dot)} />
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+        )}
+
+        {/* footer */}
+        {!submitted && (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-muted/20 px-5 py-3.5">
+            <p className="hidden text-[11.5px] font-medium text-muted-foreground/40 sm:block">
+              <span className="text-rose-500">*</span> Required
+            </p>
+            <div className="ml-auto flex items-center gap-2.5">
+              <button
+                onClick={onClose}
+                className="rounded-xl border border-border px-4 py-2 text-[13px] font-bold text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={!canSend || submitting}
                 className={cn(
-                  "w-full appearance-none rounded-xl border border-border bg-card px-4 py-3 pr-10 text-[14px] font-medium outline-none",
-                  "focus:border-orange-400/50 focus:ring-2 focus:ring-orange-400/10 transition-all",
-                  "disabled:opacity-50",
-                  !projectId && "text-muted-foreground/40"
+                  "flex items-center gap-2 rounded-xl px-5 py-2 text-[13px] font-bold text-white transition-all",
+                  canSend && !submitting
+                    ? "bg-orange-500 shadow-sm shadow-orange-500/25 hover:bg-orange-600"
+                    : "cursor-not-allowed bg-muted/60 text-muted-foreground/35",
                 )}
               >
-                <option value="" disabled>
-                  {loadingProjects ? "Loading projects…" : "Select a project"}
-                </option>
-                {projects.map((p: any) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
-            </div>
-            {projects.length === 0 && !loadingProjects && (
-              <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-amber-600">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                You are not assigned to any projects yet.
-              </p>
-            )}
-          </div>
-
-          {/* Subject */}
-          <div>
-            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/60">
-              Subject <span className="text-rose-500">*</span>
-            </label>
-            <input
-              value={subject}
-              onChange={e => setSubject(e.target.value)}
-              maxLength={255}
-              placeholder="Brief, clear description of the issue…"
-              className="w-full rounded-xl border border-border bg-card px-4 py-3 text-[14px] font-medium placeholder:text-muted-foreground/30 outline-none focus:border-orange-400/50 focus:ring-2 focus:ring-orange-400/10 transition-all"
-            />
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/60">
-              Description
-            </label>
-            <textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder="Explain the issue in detail — steps to reproduce, expected vs. actual behaviour…"
-              rows={4}
-              className="w-full resize-none rounded-xl border border-border bg-card px-4 py-3 text-[14px] font-medium placeholder:text-muted-foreground/30 outline-none focus:border-orange-400/50 focus:ring-2 focus:ring-orange-400/10 transition-all"
-            />
-          </div>
-
-          {/* Category + Priority row */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/60">
-                Category
-              </label>
-              <div className="relative">
-                <select
-                  value={category}
-                  onChange={e => setCategory(e.target.value)}
-                  className="w-full appearance-none rounded-xl border border-border bg-card px-4 py-3 pr-10 text-[14px] font-medium outline-none focus:border-orange-400/50 focus:ring-2 focus:ring-orange-400/10 transition-all"
-                >
-                  {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/60">
-                Priority
-              </label>
-              <div className="relative">
-                <select
-                  value={priority}
-                  onChange={e => setPriority(e.target.value)}
-                  className="w-full appearance-none rounded-xl border border-border bg-card px-4 py-3 pr-10 text-[14px] font-medium outline-none focus:border-orange-400/50 focus:ring-2 focus:ring-orange-400/10 transition-all"
-                >
-                  {PRIORITIES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
-              </div>
+                {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {submitting ? "Raising…" : "Raise Ticket"}
+              </button>
             </div>
           </div>
+        )}
 
-          {/* Attachments */}
-          <div>
-            <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/60">
-              Attachments
-            </label>
-
-            {/* Upload hint */}
-            <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground/50">
-              <span className="flex items-center gap-1"><Image className="h-3 w-3" /> Images up to 2 MB</span>
-              <span className="flex items-center gap-1"><Film className="h-3 w-3" /> Videos up to 10 MB</span>
-            </div>
-
-            {/* File list */}
-            {files.length > 0 && (
-              <div className="mb-3 space-y-2">
-                {files.map((af, idx) => (
-                  <div
-                    key={idx}
-                    className={cn(
-                      "flex items-center gap-3 rounded-xl border px-4 py-3",
-                      af.error
-                        ? "border-rose-200 dark:border-rose-500/25 bg-rose-50 dark:bg-rose-500/10"
-                        : "border-border bg-card"
-                    )}
-                  >
-                    {/* Thumbnail or icon */}
-                    {af.preview ? (
-                      <img src={af.preview} alt="" className="h-9 w-9 shrink-0 rounded-lg object-cover" />
-                    ) : (
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/40">
-                        {af.kind === "video"
-                          ? <Film className="h-4 w-4 text-muted-foreground/60" strokeWidth={1.5} />
-                          : <Paperclip className="h-4 w-4 text-muted-foreground/60" strokeWidth={1.5} />
-                        }
-                      </div>
-                    )}
-
-                    {/* Name + size / error */}
-                    <div className="flex-1 min-w-0">
-                      <p className={cn(
-                        "truncate text-[13px] font-semibold",
-                        af.error && "text-rose-600 dark:text-rose-400"
-                      )}>
-                        {af.file.name}
-                      </p>
-                      {af.error
-                        ? <p className="mt-0.5 text-[11px] font-medium text-rose-500">{af.error}</p>
-                        : <p className="mt-0.5 text-[11px] text-muted-foreground/50">{fmtSize(af.file.size)}</p>
-                      }
-                    </div>
-
-                    {/* Remove */}
-                    <button
-                      onClick={() => removeFile(idx)}
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-rose-500 transition-colors"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Pick button */}
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx"
-              className="hidden"
-              onChange={handleFilePick}
-            />
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="flex items-center gap-2 rounded-xl border border-dashed border-border px-4 py-3 text-[13px] font-semibold text-muted-foreground hover:border-orange-400/50 hover:bg-orange-500/5 hover:text-orange-600 transition-all w-full justify-center"
-            >
-              <Paperclip className="h-4 w-4" />
-              Attach image / video / file
-            </button>
-          </div>
-        </div>
-
-        {/* ── Footer ── */}
-        <div className="sticky bottom-0 flex items-center justify-between gap-3 border-t border-border bg-background/95 backdrop-blur px-6 py-4">
-          <button
-            onClick={onClose}
-            disabled={submitting}
-            className="rounded-xl border border-border px-5 py-2.5 text-[14px] font-bold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || !subject.trim() || !projectId || hasInvalidFiles}
-            className="flex items-center gap-2 rounded-xl bg-orange-500 px-6 py-2.5 text-[14px] font-bold text-white shadow-sm shadow-orange-500/20 transition-all hover:bg-orange-600 hover:shadow-orange-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</>
-            ) : (
-              <><Plus className="h-4 w-4" /> Raise Ticket</>
-            )}
-          </button>
-        </div>
       </div>
     </div>
   );

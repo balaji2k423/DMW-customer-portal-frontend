@@ -62,6 +62,18 @@ export interface TimelineResponse {
 export interface ProjectOption {
   id: number;
   name: string;
+  /** Numeric company/customer id */
+  customer_id?: number | null;
+  /** Human-readable company/customer name */
+  customer_name?: string | null;
+}
+
+export interface CustomerAdminOption {
+  id: number;
+  name: string;
+  email: string;
+  company: string;
+  project_ids: number[];
 }
 
 export interface CreateSubtaskPayload {
@@ -82,16 +94,40 @@ export interface UpdateSubtaskPayload {
 }
 
 export const milestonesService = {
-  // List projects the current user can access (admin sees all, customers see theirs)
+  // List customers accessible to the current user
+  listCustomers: async (): Promise<{ id: number; name: string }[]> => {
+    const { data } = await api.get("/milestones/customers/");
+    return data;
+  },
+
+  // List users with role=customer_admin (admin / project_manager only)
+  listCustomerAdmins: async (): Promise<CustomerAdminOption[]> => {
+    const { data } = await api.get("/milestones/customer-admins/");
+    return data;
+  },
+
+  // List projects the current user can access
   listProjects: async (): Promise<ProjectOption[]> => {
     const { data } = await api.get("/projects/", { params: { page_size: 500 } });
     const rows: any[] = data.results ?? data;
-    return rows.map((p: any) => ({ id: p.id, name: p.name }));
+    return rows.map((p: any) => ({
+      id:            p.id,
+      name:          p.name,
+      customer_id:   null,
+      customer_name: null,
+    }));
   },
 
-  // Get all milestones, optionally filtered by project
-  list: async (projectId?: number): Promise<Milestone[]> => {
-    const params = projectId ? { project: projectId } : {};
+  // Get all milestones, optionally filtered by project, customer, and/or customer admin
+  list: async (
+    projectId?: number,
+    customerId?: number | string,
+    customerAdminId?: number,
+  ): Promise<Milestone[]> => {
+    const params: Record<string, any> = {};
+    if (projectId)       params.project           = projectId;
+    if (customerId)      params.customer          = customerId;
+    if (customerAdminId) params.customer_admin_id = customerAdminId;
     const { data } = await api.get("/milestones/", { params });
     return data.results ?? data;
   },
@@ -150,13 +186,11 @@ export const milestonesService = {
 
   // ── Subtasks ──────────────────────────────────────────────────────────────
 
-  // List all subtasks for a milestone
   listSubtasks: async (milestoneId: number): Promise<Subtask[]> => {
     const { data } = await api.get(`/milestones/${milestoneId}/subtasks/`);
     return data.results ?? data;
   },
 
-  // Create a subtask under a milestone (admin / project_manager only)
   createSubtask: async (payload: CreateSubtaskPayload): Promise<Subtask> => {
     const { data } = await api.post(
       `/milestones/${payload.milestone_id}/subtasks/`,
@@ -165,7 +199,6 @@ export const milestonesService = {
     return data;
   },
 
-  // Update a subtask — status toggle, rename, reassign, etc.
   updateSubtask: async (
     id: number,
     payload: UpdateSubtaskPayload
@@ -174,12 +207,10 @@ export const milestonesService = {
     return data;
   },
 
-  // Delete a subtask (admin / project_manager only)
   deleteSubtask: async (id: number): Promise<void> => {
     await api.delete(`/subtasks/${id}/`);
   },
 
-  // Bulk-reorder subtasks by passing an ordered array of ids
   reorderSubtasks: async (
     milestoneId: number,
     orderedIds: number[]

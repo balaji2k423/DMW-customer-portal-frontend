@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Search, Plus, Pencil, Trash2, X, Calendar, Users,
   CheckSquare, Square, Mail, Flag, ChevronDown, ChevronUp,
+  Building2, UserCheck,
 } from "lucide-react";
 import {
   useAdminProjects,
   useCreateProject,
   useUpdateProject,
   useDeleteProject,
-  useCustomerUsers,
+  useCompanies,
+  useCustomerAdminsByCompany,
   useTeamUsers,
 } from "@/hooks/useAdminProjects";
 
@@ -18,7 +20,7 @@ type MemberAssignment = { user: number; role: string };
 
 type ProjectForm = {
   name:               string;
-  customer:           string;
+  company:            string;   // Company PK (replaces the old single `customer` FK)
   description:        string;
   contract_number:    string;
   start_date:         string;
@@ -35,12 +37,12 @@ const MEMBER_ROLES = [
 // ─── Milestone template (mirrors signals.py — keep in sync) ──────────────────
 
 const MILESTONE_TEMPLATE = [
-  { order: 1, title: "Project Kickoff",                    weekOffset: 0  },
-  { order: 2, title: "Requirements Sign-Off",              weekOffset: 2  },
-  { order: 3, title: "Design & Engineering Review",        weekOffset: 4  },
-  { order: 4, title: "Manufacturing / Build Complete",     weekOffset: 8  },
-  { order: 5, title: "Factory Acceptance Test (FAT)",      weekOffset: 10 },
-  { order: 6, title: "Site Installation & Commissioning",  weekOffset: 13 },
+  { order: 1, title: "Project Kickoff",                       weekOffset: 0  },
+  { order: 2, title: "Requirements Sign-Off",                 weekOffset: 2  },
+  { order: 3, title: "Design & Engineering Review",           weekOffset: 4  },
+  { order: 4, title: "Manufacturing / Build Complete",        weekOffset: 8  },
+  { order: 5, title: "Factory Acceptance Test (FAT)",         weekOffset: 10 },
+  { order: 6, title: "Site Installation & Commissioning",     weekOffset: 13 },
   { order: 7, title: "Site Acceptance Test & Final Sign-Off", weekOffset: 15 },
 ];
 
@@ -82,7 +84,7 @@ function userDisplayName(u: any) {
 function sanitize(form: ProjectForm) {
   return {
     ...form,
-    customer:     form.customer ? Number(form.customer) : null,
+    company:      form.company ? Number(form.company) : null,
     start_date:   form.start_date   || null,
     expected_end: form.expected_end || null,
   };
@@ -138,26 +140,113 @@ function MilestoneTemplatePreview({ startDate }: { startDate: string }) {
   );
 }
 
+// ─── Customer Admin Picker (shown after company is selected) ─────────────────
+
+function CustomerAdminPicker({
+  companyId,
+  assignments,
+  onChange,
+}: {
+  companyId: number;
+  assignments: MemberAssignment[];
+  onChange: (next: MemberAssignment[]) => void;
+}) {
+  const { data: admins = [], isLoading } = useCustomerAdminsByCompany(companyId);
+
+  if (isLoading) {
+    return (
+      <p className="text-xs text-muted-foreground py-3 text-center animate-pulse">
+        Loading customer admins…
+      </p>
+    );
+  }
+
+  if (admins.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground py-3 text-center">
+        No customer admins found for this company.
+      </p>
+    );
+  }
+
+  const isAssigned = (id: number) =>
+    assignments.some(m => m.user === id && m.role === "customer_admin");
+
+  const toggle = (userId: number) => {
+    if (isAssigned(userId)) {
+      onChange(assignments.filter(m => !(m.user === userId && m.role === "customer_admin")));
+    } else {
+      onChange([...assignments, { user: userId, role: "customer_admin" }]);
+    }
+  };
+
+  const assignedCount = admins.filter(a => isAssigned(a.id)).length;
+
+  return (
+    <div className="rounded-xl border border-border overflow-hidden divide-y divide-border">
+      {admins.map((u: any) => {
+        const assigned = isAssigned(u.id);
+        return (
+          <button
+            type="button"
+            key={u.id}
+            onClick={() => toggle(u.id)}
+            className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+              assigned ? "bg-orange-50 dark:bg-orange-500/10" : "hover:bg-muted/40"
+            }`}
+          >
+            <span className={`shrink-0 transition-colors ${
+              assigned ? "text-orange-500" : "text-muted-foreground"
+            }`}>
+              {assigned
+                ? <CheckSquare className="h-4 w-4" />
+                : <Square className="h-4 w-4" />
+              }
+            </span>
+
+            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+              assigned ? "bg-orange-100 text-orange-600" : "bg-muted text-muted-foreground"
+            }`}>
+              {userInitials(u)}
+            </span>
+
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-medium truncate">{userDisplayName(u)}</span>
+              <span className="block text-xs text-muted-foreground truncate">{u.email}</span>
+            </span>
+
+            {assigned && (
+              <span className="shrink-0 text-[10px] font-semibold text-orange-500 bg-orange-100 dark:bg-orange-500/20 px-2 py-0.5 rounded-full">
+                Admin
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Project Modal ────────────────────────────────────────────────────────────
 
 function ProjectModal({
   initial,
-  customers,
+  companies,
   teamUsers,
   onSave,
   onClose,
 }: {
-  initial?:  Partial<ProjectForm> & { id?: number };
-  customers: any[];
-  teamUsers: any[];
-  onSave:    (data: ReturnType<typeof sanitize>) => void;
-  onClose:   () => void;
+  initial?:   Partial<ProjectForm> & { id?: number };
+  companies:  any[];
+  teamUsers:  any[];
+  onSave:     (data: ReturnType<typeof sanitize>) => void;
+  onClose:    () => void;
 }) {
   const isEdit = !!initial?.id;
 
   const [form, setForm] = useState<ProjectForm>({
     name:               initial?.name            ?? "",
-    customer:           String(initial?.customer ?? ""),
+    company:            String(initial?.company  ?? ""),
     description:        initial?.description     ?? "",
     contract_number:    initial?.contract_number ?? "",
     start_date:         initial?.start_date      ?? "",
@@ -170,15 +259,30 @@ function ProjectModal({
     (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
       setForm(f => ({ ...f, [k]: e.target.value }));
 
+  // When company changes, strip out any customer_admin assignments from the old company
+  const handleCompanyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newCompany = e.target.value;
+    setForm(f => ({
+      ...f,
+      company: newCompany,
+      // Remove all customer_admin assignments (they belong to the previous company)
+      member_assignments: f.member_assignments.filter(m => m.role !== "customer_admin"),
+    }));
+  };
+
+  // ── Non-admin team members (project_manager / customer_user) ──────────────
   const isAssigned = (userId: number) =>
-    form.member_assignments.some(m => m.user === userId);
+    form.member_assignments.some(m => m.user === userId && m.role !== "customer_admin");
 
   const toggleMember = (e: React.MouseEvent, userId: number) => {
     e.stopPropagation();
+    // Guard: never touch customer_admin assignments — those are managed by Step 2
+    const user = teamUsers.find((u: any) => u.id === userId);
+    if (user?.role === "customer_admin") return;
     setForm(f =>
       isAssigned(userId)
         ? { ...f, member_assignments: f.member_assignments.filter(m => m.user !== userId) }
-        : { ...f, member_assignments: [...f.member_assignments, { user: userId, role: "project_manager" }] }
+        : { ...f, member_assignments: [...f.member_assignments, { user: userId, role: user?.role ?? "customer_user" }] }
     );
   };
 
@@ -191,6 +295,11 @@ function ProjectModal({
       ),
     }));
   };
+
+  const selectedCompanyId = form.company ? Number(form.company) : null;
+
+  // Count selected customer admins for the badge
+  const selectedAdminCount = form.member_assignments.filter(m => m.role === "customer_admin").length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
@@ -208,6 +317,7 @@ function ProjectModal({
 
         <form onSubmit={e => { e.preventDefault(); onSave(sanitize(form)); }} className="p-6 space-y-5">
 
+          {/* ── Basic Info ──────────────────────────────────────────────── */}
           <div className="grid grid-cols-2 gap-3">
 
             <div className="col-span-2">
@@ -216,23 +326,6 @@ function ProjectModal({
               </label>
               <input className={inputCls} required value={form.name} onChange={set("name")}
                 placeholder="e.g. Warehouse Automation Phase 1" />
-            </div>
-
-            <div className="col-span-2">
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                Customer *
-              </label>
-              <select className={inputCls} required value={form.customer} onChange={set("customer")}>
-                <option value="">Select customer…</option>
-                {customers.length === 0 && (
-                  <option disabled>Loading customers…</option>
-                )}
-                {customers.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
             </div>
 
             <div>
@@ -270,38 +363,95 @@ function ProjectModal({
             </div>
           </div>
 
-          {/* ── Milestone template preview (create only) ──────────── */}
+          {/* ── Milestone preview (create only) ─────────────────────────── */}
           {!isEdit && (
             <MilestoneTemplatePreview startDate={form.start_date} />
           )}
 
-          {/* ── Team Members ──────────────────────────────────────── */}
+          {/* ── Step 1: Company Selection ────────────────────────────────── */}
+          <div className="rounded-xl border border-border overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/30">
+              <Building2 className="h-4 w-4 text-orange-500" />
+              <span className="text-sm font-semibold">Step 1 — Select Company</span>
+            </div>
+            <div className="p-4">
+              <select
+                className={inputCls}
+                required
+                value={form.company}
+                onChange={handleCompanyChange}
+              >
+                <option value="">Choose a company…</option>
+                {companies.length === 0 && (
+                  <option disabled>Loading companies…</option>
+                )}
+                {companies.map((c: any) => (
+                  <option key={c.id} value={c.id}>
+                    {c.company_name}{c.city ? ` — ${c.city}` : ""}{c.state ? `, ${c.state}` : ""}
+                  </option>
+                ))}
+              </select>
+              {form.company && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Company selected. Now assign one or more customer admins from this company below.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* ── Step 2: Customer Admin Picker (unlocks after company chosen) ── */}
+          <div className="rounded-xl border border-border overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/30">
+              <UserCheck className="h-4 w-4 text-orange-500" />
+              <span className="text-sm font-semibold">Step 2 — Assign Customer Admins</span>
+              {selectedAdminCount > 0 && (
+                <span className="ml-auto text-xs font-semibold text-orange-500 bg-orange-100 dark:bg-orange-500/20 px-2 py-0.5 rounded-full">
+                  {selectedAdminCount} selected
+                </span>
+              )}
+            </div>
+            <div className="p-4">
+              {!selectedCompanyId ? (
+                <p className="text-xs text-muted-foreground text-center py-3">
+                  Select a company above to see available customer admins.
+                </p>
+              ) : (
+                <CustomerAdminPicker
+                  companyId={selectedCompanyId}
+                  assignments={form.member_assignments}
+                  onChange={next => setForm(f => ({ ...f, member_assignments: next }))}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* ── Team Members (project_manager / customer_user) ────────────── */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Users className="h-4 w-4 text-muted-foreground" />
               <span className="text-sm font-semibold">Team Members</span>
               <span className="ml-auto text-xs text-orange-500 font-medium">
-                {form.member_assignments.length} selected
+                {form.member_assignments.filter(m => m.role !== "customer_admin").length} selected
               </span>
             </div>
 
-            {teamUsers.length === 0 ? (
+            {teamUsers.filter((u: any) => u.role !== "customer_admin").length === 0 ? (
               <p className="text-center text-xs text-muted-foreground py-4">
                 No users available.
               </p>
             ) : (
               <div className="rounded-xl border border-border overflow-hidden divide-y divide-border">
-                {teamUsers.map(u => {
+                {teamUsers.filter((u: any) => u.role !== "customer_admin").map((u: any) => {
                   const assigned   = isAssigned(u.id);
-                  const assignment = form.member_assignments.find(m => m.user === u.id);
+                  const assignment = form.member_assignments.find(
+                    m => m.user === u.id && m.role !== "customer_admin"
+                  );
 
                   return (
                     <div
                       key={u.id}
                       className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                        assigned
-                          ? "bg-orange-50 dark:bg-orange-500/10"
-                          : "hover:bg-muted/40"
+                        assigned ? "bg-orange-50 dark:bg-orange-500/10" : "hover:bg-muted/40"
                       }`}
                     >
                       <button type="button" onClick={e => toggleMember(e, u.id)}
@@ -331,7 +481,8 @@ function ProjectModal({
                           onClick={e => e.stopPropagation()}
                           className="shrink-0 rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-orange-400 transition-all"
                         >
-                          {MEMBER_ROLES.map(r => (
+                          {/* Exclude customer_admin here — those are managed by Step 2 */}
+                          {MEMBER_ROLES.filter(r => r.value !== "customer_admin").map(r => (
                             <option key={r.value} value={r.value}>{r.label}</option>
                           ))}
                         </select>
@@ -382,6 +533,9 @@ function ProjectCard({
     .map((w: string) => w[0])
     .join("")
     .toUpperCase();
+
+  // Show company name on card; admins listed below it
+  const adminNames: string[] = project.customer_admins ?? [];
 
   return (
     <>
@@ -440,9 +594,15 @@ function ProjectCard({
           margin-top: 1rem;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .proj-card .proj-bottom .proj-content .proj-customer {
-          display: block; font-size: 0.78rem; color: rgba(255,255,255,0.75);
-          margin-top: 0.3rem;
+        .proj-card .proj-bottom .proj-content .proj-company {
+          display: block; font-size: 0.78rem; color: rgba(255,255,255,0.85);
+          margin-top: 0.25rem;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          font-weight: 600;
+        }
+        .proj-card .proj-bottom .proj-content .proj-admins {
+          display: block; font-size: 0.7rem; color: rgba(255,255,255,0.65);
+          margin-top: 0.15rem;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .proj-card .proj-bottom .proj-content .proj-desc {
@@ -450,7 +610,7 @@ function ProjectCard({
           -webkit-line-clamp: 2; -webkit-box-orient: vertical;
           overflow: hidden;
           font-size: 0.78rem; color: rgba(255,255,255,0.7);
-          margin-top: 0.6rem; line-height: 1.4;
+          margin-top: 0.5rem; line-height: 1.4;
         }
 
         .proj-card .proj-bottom .proj-meta {
@@ -530,9 +690,15 @@ function ProjectCard({
         <div className="proj-bottom">
           <div className="proj-content">
             <span className="proj-name">{project.name}</span>
-            <span className="proj-customer">
-              {project.customer_name ?? "—"}
+            <span className="proj-company">
+              {project.company_name ?? "—"}
             </span>
+            {adminNames.length > 0 && (
+              <span className="proj-admins">
+                {adminNames.slice(0, 2).join(", ")}
+                {adminNames.length > 2 ? ` +${adminNames.length - 2} more` : ""}
+              </span>
+            )}
             {project.description && (
               <span className="proj-desc">{project.description}</span>
             )}
@@ -574,7 +740,7 @@ function ProjectCard({
 
 export default function AdminProjectsPage() {
   const { data: projects = [], isLoading } = useAdminProjects();
-  const { data: customers = [] }           = useCustomerUsers();
+  const { data: companies = [] }           = useCompanies();
   const { data: teamUsers = [] }           = useTeamUsers();
 
   const createProject = useCreateProject();
@@ -586,7 +752,7 @@ export default function AdminProjectsPage() {
   const [toDelete, setDelete] = useState<null | { id: number; name: string }>(null);
 
   const filtered = (projects as any[]).filter(p =>
-    (p.name + (p.customer_name ?? "") + (p.contract_number ?? ""))
+    (p.name + (p.company_name ?? "") + (p.contract_number ?? ""))
       .toLowerCase()
       .includes(search.toLowerCase())
   );
@@ -627,7 +793,7 @@ export default function AdminProjectsPage() {
 
       {modal === "create" && (
         <ProjectModal
-          customers={customers}
+          companies={companies}
           teamUsers={teamUsers}
           onSave={data => { createProject.mutate(data); setModal(null); }}
           onClose={() => setModal(null)} />
@@ -643,7 +809,7 @@ export default function AdminProjectsPage() {
               role: m.role,
             })),
           }}
-          customers={customers}
+          companies={companies}
           teamUsers={teamUsers}
           onSave={data => { updateProject.mutate({ id: modal.id, ...data }); setModal(null); }}
           onClose={() => setModal(null)} />
