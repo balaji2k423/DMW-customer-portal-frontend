@@ -9,19 +9,18 @@ import type { ReactNode } from "react";
 
 import { AppLayout } from "@/components/AppLayout";
 
-import Dashboard        from "./pages/Dashboard";
-import Login            from "./pages/Login";
-import Milestones       from "./pages/Milestones";
-import Documents        from "./pages/Documents";
-import Tickets          from "./pages/Tickets";
-import TicketDetail     from "./pages/TicketDetail";
-import Notifications    from "./pages/Notifications";
-import Profile          from "./pages/Profile";
-import NotFound         from "./pages/NotFound";
+import Dashboard         from "./pages/Dashboard";
+import Login             from "./pages/Login";
+import Milestones        from "./pages/Milestones";
+import Documents         from "./pages/Documents";
+import Tickets           from "./pages/Tickets";
+import TicketDetail      from "./pages/TicketDetail";
+import Notifications     from "./pages/Notifications";
+import Profile           from "./pages/Profile";
+import NotFound          from "./pages/NotFound";
 import AdminUsersPage    from "./pages/admin/Adminuserpage";
 import AdminProjectsPage from "./pages/admin/Admiprojectpage";
-import AdminCompanyPage  from "./pages/admin/AdminCompanyPage";   // ← new
-
+import AdminCompanyPage  from "./pages/admin/AdminCompanyPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,7 +45,7 @@ const AuthLoader = () => (
 );
 
 // ---------------------------------------------------------------------------
-// Guards — must live inside BrowserRouter + AuthProvider
+// Guards
 // ---------------------------------------------------------------------------
 
 const ProtectedRoute = ({ children }: { children: ReactNode }) => {
@@ -61,14 +60,12 @@ const PublicRoute = ({ children }: { children: ReactNode }) => {
   return user ? <Navigate to="/" replace /> : <>{children}</>;
 };
 
-// Admin-only guard — redirects non-admins to dashboard
+// ✅ Admin-only guard — only role === "admin" passes through
 const AdminRoute = ({ children }: { children: ReactNode }) => {
   const { user, loading } = useAuth();
   if (loading) return <AuthLoader />;
   if (!user) return <Navigate to="/login" replace />;
-  const isAdmin   = user.role === "admin";
-  const isManager = user.role === "project_manager";
-  if (!isAdmin && !isManager) return <Navigate to="/" replace />;
+  if (user.role !== "admin") return <Navigate to="/" replace />;
   return <>{children}</>;
 };
 
@@ -82,6 +79,7 @@ const Protected = ({ children }: { children: ReactNode }) => (
   </ProtectedRoute>
 );
 
+// ✅ Admin wrapper — combines AdminRoute guard + AppLayout
 const Admin = ({ children }: { children: ReactNode }) => (
   <AdminRoute>
     <AppLayout>{children}</AppLayout>
@@ -89,8 +87,7 @@ const Admin = ({ children }: { children: ReactNode }) => (
 );
 
 // ---------------------------------------------------------------------------
-// App — AuthProvider is OUTSIDE BrowserRouter so context is available
-//       before the router begins rendering any routes.
+// App
 // ---------------------------------------------------------------------------
 
 const App = () => (
@@ -113,7 +110,7 @@ const App = () => (
                 }
               />
 
-              {/* Protected (any authenticated user) */}
+              {/* Protected — any authenticated user */}
               <Route path="/"              element={<Protected><Dashboard /></Protected>} />
               <Route path="/milestones"    element={<Protected><Milestones /></Protected>} />
               <Route path="/documents"     element={<Protected><Documents /></Protected>} />
@@ -122,10 +119,10 @@ const App = () => (
               <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
               <Route path="/profile"       element={<Protected><Profile /></Protected>} />
 
-              {/* Admin / Project Manager only */}
-              <Route path="/admin/users"    element={<Admin><AdminUsersPage /></Admin>} />
+              {/* ✅ Admin only — project_manager and others are redirected to "/" */}
               <Route path="/admin/projects" element={<Admin><AdminProjectsPage /></Admin>} />
-              <Route path="/admin/company"  element={<Admin><AdminCompanyPage /></Admin>} />   {/* ← new */}
+              <Route path="/admin/users"    element={<Admin><AdminUsersPage /></Admin>} />
+              <Route path="/admin/company"  element={<Admin><AdminCompanyPage /></Admin>} />
 
               {/* 404 */}
               <Route path="*" element={<NotFound />} />

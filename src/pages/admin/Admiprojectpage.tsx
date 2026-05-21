@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Search, Plus, Pencil, Trash2, X, Calendar, Users,
   CheckSquare, Square, Mail, Flag, ChevronDown, ChevronUp,
@@ -20,7 +20,7 @@ type MemberAssignment = { user: number; role: string };
 
 type ProjectForm = {
   name:               string;
-  company:            string;   // Company PK (replaces the old single `customer` FK)
+  company:            string;
   description:        string;
   contract_number:    string;
   start_date:         string;
@@ -28,13 +28,20 @@ type ProjectForm = {
   member_assignments: MemberAssignment[];
 };
 
-const MEMBER_ROLES = [
-  { value: "project_manager", label: "Project Manager" },
-  { value: "customer_admin",  label: "Customer Admin" },
-  { value: "customer_user",   label: "Customer User" },
-];
+// Valid roles the backend accepts for project members
+const VALID_PROJECT_ROLES = new Set(["project_manager", "customer_admin", "customer_user"]);
 
-// ─── Milestone template (mirrors signals.py — keep in sync) ──────────────────
+/**
+ * Maps a user's system role to the closest valid project member role.
+ * "admin" is a system-level role — the backend won't accept it in member_assignments.
+ */
+function toProjectRole(systemRole?: string): string {
+  if (systemRole === "project_manager") return "project_manager";
+  if (systemRole === "customer_admin")  return "customer_admin";
+  return "customer_user"; // admin, customer_user, unknown → default
+}
+
+// ─── Milestone template ───────────────────────────────────────────────────────
 
 const MILESTONE_TEMPLATE = [
   { order: 1, title: "Project Kickoff",                       weekOffset: 0  },
@@ -81,12 +88,21 @@ function userDisplayName(u: any) {
   return u.full_name ?? (`${u.first_name ?? ""} ${u.last_name ?? ""}`.trim() || u.email);
 }
 
+/**
+ * Sanitize form before sending to API:
+ * - Convert company to number
+ * - Empty strings → null for dates
+ * - Strip any member_assignments whose role the backend won't accept (e.g. "admin")
+ */
 function sanitize(form: ProjectForm) {
   return {
     ...form,
     company:      form.company ? Number(form.company) : null,
     start_date:   form.start_date   || null,
     expected_end: form.expected_end || null,
+    member_assignments: form.member_assignments.filter(m =>
+      VALID_PROJECT_ROLES.has(m.role)
+    ),
   };
 }
 
@@ -140,7 +156,7 @@ function MilestoneTemplatePreview({ startDate }: { startDate: string }) {
   );
 }
 
-// ─── Customer Admin Picker (shown after company is selected) ─────────────────
+// ─── Customer Admin Picker ────────────────────────────────────────────────────
 
 function CustomerAdminPicker({
   companyId,
@@ -179,8 +195,6 @@ function CustomerAdminPicker({
       onChange([...assignments, { user: userId, role: "customer_admin" }]);
     }
   };
-
-  const assignedCount = admins.filter(a => isAssigned(a.id)).length;
 
   return (
     <div className="rounded-xl border border-border overflow-hidden divide-y divide-border">
@@ -259,47 +273,48 @@ function ProjectModal({
     (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
       setForm(f => ({ ...f, [k]: e.target.value }));
 
-  // When company changes, strip out any customer_admin assignments from the old company
+  // When company changes, strip out customer_admin assignments from the old company
   const handleCompanyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newCompany = e.target.value;
     setForm(f => ({
       ...f,
       company: newCompany,
-      // Remove all customer_admin assignments (they belong to the previous company)
       member_assignments: f.member_assignments.filter(m => m.role !== "customer_admin"),
     }));
   };
 
-  // ── Non-admin team members (project_manager / customer_user) ──────────────
+  // Check if a team member (non-customer_admin) is assigned
   const isAssigned = (userId: number) =>
     form.member_assignments.some(m => m.user === userId && m.role !== "customer_admin");
 
   const toggleMember = (e: React.MouseEvent, userId: number) => {
     e.stopPropagation();
-    // Guard: never touch customer_admin assignments — those are managed by Step 2
     const user = teamUsers.find((u: any) => u.id === userId);
+    // Never touch customer_admin assignments here — managed by Step 2
     if (user?.role === "customer_admin") return;
+
     setForm(f =>
       isAssigned(userId)
         ? { ...f, member_assignments: f.member_assignments.filter(m => m.user !== userId) }
-        : { ...f, member_assignments: [...f.member_assignments, { user: userId, role: user?.role ?? "customer_user" }] }
+        : {
+            ...f,
+            member_assignments: [
+              ...f.member_assignments,
+              // ✅ Use toProjectRole to ensure valid backend role (never sends "admin")
+              { user: userId, role: toProjectRole(user?.role) },
+            ],
+          }
     );
   };
 
-  const updateRole = (e: React.ChangeEvent<HTMLSelectElement>, userId: number) => {
-    e.stopPropagation();
-    setForm(f => ({
-      ...f,
-      member_assignments: f.member_assignments.map(m =>
-        m.user === userId ? { ...m, role: e.target.value } : m
-      ),
-    }));
-  };
-
-  const selectedCompanyId = form.company ? Number(form.company) : null;
-
-  // Count selected customer admins for the badge
+  const selectedCompanyId  = form.company ? Number(form.company) : null;
   const selectedAdminCount = form.member_assignments.filter(m => m.role === "customer_admin").length;
+
+  // Team users excluding customer_admins (they're handled in Step 2)
+  // Also exclude system admins from the list entirely — they have global access
+  const visibleTeamUsers = teamUsers.filter(
+    (u: any) => u.role !== "customer_admin" && u.role !== "admin"
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
@@ -399,7 +414,7 @@ function ProjectModal({
             </div>
           </div>
 
-          {/* ── Step 2: Customer Admin Picker (unlocks after company chosen) ── */}
+          {/* ── Step 2: Customer Admin Picker ─────────────────────────────── */}
           <div className="rounded-xl border border-border overflow-hidden">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/30">
               <UserCheck className="h-4 w-4 text-orange-500" />
@@ -425,7 +440,7 @@ function ProjectModal({
             </div>
           </div>
 
-          {/* ── Team Members (project_manager / customer_user) ────────────── */}
+          {/* ── Team Members ──────────────────────────────────────────────── */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Users className="h-4 w-4 text-muted-foreground" />
@@ -435,17 +450,14 @@ function ProjectModal({
               </span>
             </div>
 
-            {teamUsers.filter((u: any) => u.role !== "customer_admin").length === 0 ? (
+            {visibleTeamUsers.length === 0 ? (
               <p className="text-center text-xs text-muted-foreground py-4">
                 No users available.
               </p>
             ) : (
               <div className="rounded-xl border border-border overflow-hidden divide-y divide-border">
-                {teamUsers.filter((u: any) => u.role !== "customer_admin").map((u: any) => {
-                  const assigned   = isAssigned(u.id);
-                  const assignment = form.member_assignments.find(
-                    m => m.user === u.id && m.role !== "customer_admin"
-                  );
+                {visibleTeamUsers.map((u: any) => {
+                  const assigned = isAssigned(u.id);
 
                   return (
                     <div
@@ -454,6 +466,7 @@ function ProjectModal({
                         assigned ? "bg-orange-50 dark:bg-orange-500/10" : "hover:bg-muted/40"
                       }`}
                     >
+                      {/* Checkbox */}
                       <button type="button" onClick={e => toggleMember(e, u.id)}
                         className={`shrink-0 transition-colors ${
                           assigned ? "text-orange-500" : "text-muted-foreground hover:text-orange-400"
@@ -461,6 +474,7 @@ function ProjectModal({
                         {assigned ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
                       </button>
 
+                      {/* Avatar */}
                       <button type="button" onClick={e => toggleMember(e, u.id)}
                         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${
                           assigned ? "bg-orange-100 text-orange-600" : "bg-muted text-muted-foreground"
@@ -468,29 +482,21 @@ function ProjectModal({
                         {userInitials(u)}
                       </button>
 
+                      {/* Name + email */}
                       <button type="button" onClick={e => toggleMember(e, u.id)}
                         className="flex-1 min-w-0 text-left">
                         <p className="text-sm font-medium truncate">{userDisplayName(u)}</p>
                         <p className="text-xs text-muted-foreground truncate">{u.email}</p>
                       </button>
 
-                      {assigned ? (
-                        <select
-                          value={assignment?.role ?? "project_manager"}
-                          onChange={e => updateRole(e, u.id)}
-                          onClick={e => e.stopPropagation()}
-                          className="shrink-0 rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-orange-400 transition-all"
-                        >
-                          {/* Exclude customer_admin here — those are managed by Step 2 */}
-                          {MEMBER_ROLES.filter(r => r.value !== "customer_admin").map(r => (
-                            <option key={r.value} value={r.value}>{r.label}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="shrink-0 text-[10px] text-muted-foreground capitalize px-1">
-                          {u.role?.replace(/_/g, " ")}
-                        </span>
-                      )}
+                      {/* ✅ Role badge only — no dropdown, role is fixed by system role */}
+                      <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                        assigned
+                          ? "bg-orange-100 text-orange-600 dark:bg-orange-500/20 dark:text-orange-400"
+                          : "bg-muted text-muted-foreground"
+                      }`}>
+                        {u.role?.replace(/_/g, " ")}
+                      </span>
                     </div>
                   );
                 })}
@@ -534,7 +540,6 @@ function ProjectCard({
     .join("")
     .toUpperCase();
 
-  // Show company name on card; admins listed below it
   const adminNames: string[] = project.customer_admins ?? [];
 
   return (
@@ -791,6 +796,7 @@ export default function AdminProjectsPage() {
         </div>
       )}
 
+      {/* Create modal */}
       {modal === "create" && (
         <ProjectModal
           companies={companies}
@@ -799,6 +805,7 @@ export default function AdminProjectsPage() {
           onClose={() => setModal(null)} />
       )}
 
+      {/* Edit modal */}
       {modal && modal !== "create" && (
         <ProjectModal
           initial={{
@@ -815,6 +822,7 @@ export default function AdminProjectsPage() {
           onClose={() => setModal(null)} />
       )}
 
+      {/* Delete confirm */}
       {toDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl text-center">

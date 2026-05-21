@@ -3,18 +3,19 @@ import { useNavigate } from "react-router-dom";
 import {
   CheckCircle2, Clock, Activity, AlertCircle, FileText,
   ChevronRight, FolderOpen, Plus, Calendar, Loader2,
-  RefreshCw, Wifi, WifiOff, TrendingUp, BarChart2,
-  ArrowUpRight, ArrowDownRight,
+  RefreshCw, Wifi, WifiOff, TrendingUp, Upload,
+  ArrowUpRight, ArrowDownRight, CheckSquare, Headphones,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { milestonesService, type Milestone } from "@/services/milestones";
 import { ticketsService, type Ticket, type TicketSummary } from "@/services/tickets";
 import { documentsService, type Document } from "@/services/documents";
 
-// ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL = 10_000;
+const BRAND        = "#E8510A";
+const BRAND_LIGHT  = "#FEF0E9";
+const BRAND_MID    = "#F97316";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
@@ -31,65 +32,103 @@ function timeAgo(iso: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// ─── Marquee ──────────────────────────────────────────────────────────────────
-function MarqueeStrip({ children, speed = 40 }: { children: React.ReactNode; speed?: number }) {
-  const ref = useRef<HTMLDivElement>(null);
+// ─── Sparkline ────────────────────────────────────────────────────────────────
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  const w = 80, h = 32;
+  const min = Math.min(...data), max = Math.max(...data);
+  const range = max - min || 1;
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h - ((v - min) / range) * (h - 4) - 2;
+    return `${x},${y}`;
+  }).join(" ");
+  const first = data[0], last = data[data.length - 1];
+  const y0 = h - ((first - min) / range) * (h - 4) - 2;
+  const areaBot = `${w},${h} 0,${h}`;
   return (
-    <div
-      className="overflow-hidden w-full"
-      style={{ maskImage: "linear-gradient(to right, transparent, black 80px, black calc(100% - 80px), transparent)" }}
-    >
-      <div
-        ref={ref}
-        className="flex gap-4 w-max"
-        style={{ animation: `marquee ${speed}s linear infinite` }}
-        onMouseEnter={() => ref.current && (ref.current.style.animationPlayState = "paused")}
-        onMouseLeave={() => ref.current && (ref.current.style.animationPlayState = "running")}
-      >
-        {children}
-        {children}
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      <polygon points={`0,${y0} ${pts} ${areaBot}`} fill={color} fillOpacity="0.12" />
+    </svg>
+  );
+}
+
+// ─── KPI Card ─────────────────────────────────────────────────────────────────
+function KpiCard({
+  label, value, sub, trend, icon: Icon, iconBg, sparkData, sparkColor,
+}: {
+  label: string; value: string; sub: string;
+  trend?: { val: string; up: boolean } | null;
+  icon: React.ElementType; iconBg: string;
+  sparkData?: number[]; sparkColor?: string;
+}) {
+  return (
+    <div className="bg-card rounded-2xl border border-border shadow-sm p-5 flex flex-col gap-4">
+      <div className="flex items-start justify-between">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl shrink-0" style={{ background: iconBg }}>
+          <Icon className="h-5 w-5 text-white" strokeWidth={1.75} />
+        </div>
+        {sparkData && sparkColor && (
+          <Sparkline data={sparkData} color={sparkColor} />
+        )}
+      </div>
+      <div>
+        <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{label}</p>
+        <p className="text-2xl font-bold text-foreground tracking-tight mt-0.5 tabular-nums">{value}</p>
+        {trend ? (
+          <div className={cn("flex items-center gap-1 mt-1.5 text-[11px] font-semibold", trend.up ? "text-emerald-600" : "text-red-500")}>
+            {trend.up ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+            <span>{trend.val}</span>
+            <span className="text-muted-foreground font-normal">{sub}</span>
+          </div>
+        ) : (
+          <p className="text-[11px] text-muted-foreground mt-1">{sub}</p>
+        )}
       </div>
     </div>
   );
 }
 
-// ─── Project Card ─────────────────────────────────────────────────────────────
-function ProjectCard({ milestone }: { milestone: Milestone }) {
-  const cfg: Record<string, { bg: string; text: string; border: string; label: string; progress: number }> = {
-    completed:   { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200", label: "Completed",   progress: 100 },
-    in_progress: { bg: "bg-blue-50",    text: "text-blue-700",    border: "border-blue-200",    label: "In Progress", progress: 55  },
-    pending:     { bg: "bg-gray-100",   text: "text-gray-500",    border: "border-gray-200",    label: "Pending",     progress: 0   },
-    delayed:     { bg: "bg-amber-50",   text: "text-amber-700",   border: "border-amber-200",   label: "Delayed",     progress: 30  },
-    cancelled:   { bg: "bg-red-50",     text: "text-red-600",     border: "border-red-200",     label: "Cancelled",   progress: 0   },
-  };
-  const s = cfg[milestone.status] ?? cfg.pending;
+// ─── Donut Chart ──────────────────────────────────────────────────────────────
+function DonutChart({ open, inProgress, resolved }: { open: number; inProgress: number; resolved: number }) {
+  const total = open + inProgress + resolved || 1;
+  const r = 52, cx = 68, cy = 68, stroke = 14;
+  const circ = 2 * Math.PI * r;
+  const segments = [
+    { val: open,       color: BRAND,     label: "Open" },
+    { val: inProgress, color: "#FBBF24", label: "In Progress" },
+    { val: resolved,   color: "#10B981", label: "Resolved" },
+  ];
+  let offset = 0;
+  const arcs = segments.map((s) => {
+    const dash = (s.val / total) * circ;
+    const arc = { dash, offset, color: s.color };
+    offset += dash;
+    return arc;
+  });
   return (
-    <div className="flex-shrink-0 w-72 bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col gap-3 hover:border-blue-200 hover:shadow-md transition-all duration-200 cursor-default">
-      <div className="flex items-center justify-between">
-        <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-md border uppercase tracking-wide", s.bg, s.text, s.border)}>
-          {s.label}
-        </span>
-        {milestone.planned_date && (
-          <span className="text-[10px] font-medium text-gray-400">{formatShortDate(milestone.planned_date)}</span>
-        )}
-      </div>
-      <div>
-        <p className="text-sm font-semibold text-slate-900 leading-tight line-clamp-1">{milestone.title}</p>
-        {milestone.description && (
-          <p className="text-[11px] text-gray-400 mt-1 leading-relaxed line-clamp-2">{milestone.description}</p>
-        )}
-      </div>
-      <div className="mt-auto">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[10px] text-gray-400">Progress</span>
-          <span className="text-[10px] font-bold text-slate-700">{s.progress}%</span>
-        </div>
-        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-          <div
-            className={cn("h-full rounded-full transition-all", milestone.status === "completed" ? "bg-emerald-500" : milestone.status === "delayed" ? "bg-amber-400" : "bg-blue-500")}
-            style={{ width: `${s.progress}%` }}
+    <div className="flex items-center gap-5">
+      <svg width="136" height="136" viewBox="0 0 136 136">
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="currentColor" strokeOpacity="0.08" strokeWidth={stroke} />
+        {arcs.map((a, i) => (
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none"
+            stroke={a.color} strokeWidth={stroke}
+            strokeDasharray={`${a.dash} ${circ - a.dash}`}
+            strokeDashoffset={-a.offset + circ / 4}
+            strokeLinecap="round"
           />
-        </div>
+        ))}
+        <text x={cx} y={cy - 4} textAnchor="middle" fontSize="22" fontWeight="700" fill="currentColor">{open + inProgress + resolved}</text>
+        <text x={cx} y={cy + 14} textAnchor="middle" fontSize="11" fill="currentColor" fillOpacity="0.5">Total</text>
+      </svg>
+      <div className="space-y-3">
+        {segments.map((s) => (
+          <div key={s.label} className="flex items-center gap-2.5">
+            <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: s.color }} />
+            <span className="text-xs text-muted-foreground">{s.label}</span>
+            <span className="ml-auto text-xs font-bold text-foreground tabular-nums pl-4">{s.val}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -107,12 +146,12 @@ interface DashboardData {
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  const [data, setData]             = useState<DashboardData>({ milestones: [], tickets: [], documents: [], summary: null });
-  const [loading, setLoading]       = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [data, setData]               = useState<DashboardData>({ milestones: [], tickets: [], documents: [], summary: null });
+  const [loading, setLoading]         = useState(true);
+  const [refreshing, setRefreshing]   = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [online, setOnline]         = useState(true);
-  const timerRef                    = useRef<ReturnType<typeof setInterval>>();
+  const [online, setOnline]           = useState(true);
+  const timerRef                      = useRef<ReturnType<typeof setInterval>>();
 
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -153,467 +192,412 @@ export default function Dashboard() {
   }, [fetchData]);
 
   const { milestones, tickets, documents, summary } = data;
+
   const completedMilestones  = milestones.filter((m) => m.status === "completed").length;
   const inProgressMilestones = milestones.filter((m) => m.status === "in_progress").length;
   const overallProgress      = milestones.length ? Math.round((completedMilestones / milestones.length) * 100) : 0;
   const nextMilestone        = milestones.find((m) => m.status === "in_progress") ?? milestones.find((m) => m.status === "pending");
   const openTickets          = tickets.filter((t) => t.status !== "closed" && t.status !== "resolved");
+  const resolvedTickets      = tickets.filter((t) => t.status === "resolved" || t.status === "closed");
+  const inProgressTickets    = tickets.filter((t) => t.status === "in_progress");
   const criticalCount        = openTickets.filter((t) => t.priority === "critical").length;
   const highCount            = openTickets.filter((t) => t.priority === "high").length;
   const recentDocs           = [...documents].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()).slice(0, 5);
+  const recentActivity       = [
+    ...tickets.slice(0, 3).map((t) => ({ id: t.id, type: "ticket" as const, title: t.subject, sub: `${t.ticket_id} · ${t.assigned_to_name ?? "Unassigned"}`, time: t.updated_at, priority: t.priority })),
+    ...recentDocs.slice(0, 2).map((d)  => ({ id: d.id, type: "doc" as const,    title: d.title,   sub: d.category,  time: d.updated_at, priority: null })),
+  ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 5);
 
   const statusProgressMap: Record<string, number> = {
-    completed: 100, in_progress: 55, pending: 0, delayed: 30, cancelled: 0,
+    completed: 100, in_progress: 65, pending: 0, delayed: 30, cancelled: 0,
   };
 
+  const sparkRevenue = [18, 22, 19, 28, 24, 30, 26, 35, 31, 38, 34, 40];
+  const sparkRobots  = [700, 720, 710, 740, 760, 750, 780, 800, 820, 810, 840, 847];
+  const sparkUptime  = [99.8, 99.9, 99.85, 99.95, 99.9, 99.92, 99.96, 99.97, 99.98, 99.96, 99.97, 99.97];
+  const sparkTickets = [30, 27, 32, 28, 25, 29, 26, 24, 28, 25, 24, 23];
+
   if (loading) return (
-    <div className="flex items-center justify-center h-screen" style={{ background: "#f0f2f5" }}>
+    <div className="flex items-center justify-center h-[calc(100vh-4rem)] bg-background">
       <div className="flex flex-col items-center gap-3">
-        <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
-        <p className="text-sm text-gray-500 font-medium">Loading dashboard…</p>
+        <div className="h-10 w-10 rounded-xl flex items-center justify-center" style={{ background: BRAND }}>
+          <Loader2 className="h-5 w-5 animate-spin text-white" />
+        </div>
+        <p className="text-sm text-muted-foreground font-medium">Loading dashboard…</p>
       </div>
     </div>
   );
 
   return (
-    <>
-      <style>{`
-        @keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
-        .line-clamp-1 { display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
-        .line-clamp-2 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-      `}</style>
+    <div className="flex-1 overflow-auto bg-background">
+      <div className="w-full max-w-screen-2xl mx-auto px-6 py-6 space-y-6">
 
-      <div className="min-h-screen w-full font-sans" style={{ background: "#f0f2f5" }}>
-        <div className="w-full max-w-screen-2xl mx-auto px-6 py-6 space-y-5">
-
-          {/* ── Top Bar ─────────────────────────────────────────────────── */}
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">DMW Robotics · Enterprise Portal</p>
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Project Dashboard</h1>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className={cn(
-                "flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-full border",
-                online ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-600 border-red-100"
-              )}>
-                {online ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-                {online ? "Live" : "Offline"}
-              </div>
-              <button
-                onClick={() => fetchData(true)}
-                disabled={refreshing}
-                className="flex items-center gap-1.5 text-[11px] font-medium text-gray-500 hover:text-slate-900 px-3 py-1.5 rounded-full border border-gray-200 bg-white hover:border-gray-300 transition-all"
-              >
-                <RefreshCw className={cn("h-3 w-3", refreshing && "animate-spin")} />
-                {refreshing ? "Refreshing…" : lastUpdated ? `Updated ${timeAgo(lastUpdated.toISOString())}` : "Refresh"}
-              </button>
-              
-            </div>
+        {/* ── Greeting + status bar ─────────────────────────────────────── */}
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-foreground">Welcome back! 👋</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">Here's a quick overview of your robotics operations.</p>
           </div>
-
-          {/* ── Hero + KPIs ──────────────────────────────────────────────── */}
-          <div className="grid grid-cols-12 gap-5">
-
-            {/* Hero — 8 cols */}
-            <div className="col-span-12 lg:col-span-8 relative overflow-hidden rounded-2xl bg-slate-900 text-white">
-              <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute top-0 right-0 w-80 h-80 bg-blue-600/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4" />
-                <div className="absolute bottom-0 left-1/3 w-64 h-64 bg-indigo-700/10 rounded-full blur-3xl translate-y-1/2" />
-              </div>
-              <div className="relative p-7 flex gap-8 h-full">
-                <div className="flex-1 flex flex-col justify-between">
-                  <div>
-                    <div className="inline-flex items-center gap-2 bg-emerald-500/15 border border-emerald-500/25 rounded-full px-3 py-1 mb-3">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">In Progress</span>
-                    </div>
-                    <h2 className="text-xl font-bold tracking-tight leading-snug">
-                      {nextMilestone?.title ?? "Commissioning Phase – In Progress"}
-                    </h2>
-                    <p className="text-sm text-gray-300 mt-2 leading-relaxed max-w-lg line-clamp-2">
-                      {nextMilestone?.description ?? "Factory Automation Line A is undergoing final calibration. Sensors and actuator synchronization are reaching optimal performance metrics."}
-                    </p>
-                  </div>
-                  <div className="mt-5">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Overall Completion</span>
-                      <span className="text-2xl font-bold text-white tabular-nums">{overallProgress}%</span>
-                    </div>
-                    <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-blue-500 rounded-full transition-all duration-700"
-                        style={{ width: `${overallProgress}%`, boxShadow: "0 0 8px rgba(59,130,246,0.6)" }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] text-gray-500 mt-1.5">
-                      <span>{completedMilestones} completed · {inProgressMilestones} in progress</span>
-                      <span>{milestones.length - completedMilestones} remaining</span>
-                    </div>
-                  </div>
-                </div>
-                {/* Milestone counters panel */}
-                <div className="hidden lg:flex flex-col justify-center gap-3 border-l border-white/10 pl-8 shrink-0">
-                  {[
-                    { label: "Total",       value: milestones.length,                                       color: "text-white" },
-                    { label: "Completed",   value: completedMilestones,                                     color: "text-emerald-400" },
-                    { label: "In Progress", value: inProgressMilestones,                                    color: "text-blue-400" },
-                    { label: "Pending",     value: milestones.filter(m => m.status === "pending").length,   color: "text-gray-400" },
-                    { label: "Delayed",     value: milestones.filter(m => m.status === "delayed").length,   color: "text-amber-400" },
-                  ].map((s) => (
-                    <div key={s.label} className="text-center min-w-[68px]">
-                      <p className={cn("text-xl font-bold tabular-nums", s.color)}>{s.value}</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">{s.label}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
+          <div className="flex items-center gap-2">
+            <div className={cn(
+              "flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-full border",
+              online
+                ? "bg-emerald-500/10 text-emerald-600 border-emerald-200 dark:border-emerald-900"
+                : "bg-red-500/10 text-red-600 border-red-200 dark:border-red-900"
+            )}>
+              {online ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+              {online ? "Live" : "Offline"}
             </div>
-
-            {/* KPI cards — 4 cols, 2x2 grid */}
-            <div className="col-span-12 lg:col-span-4 grid grid-cols-2 gap-3">
-              {[
-                {
-                  label: "Overall Progress", value: `${overallProgress}%`,
-                  sub: `${completedMilestones}/${milestones.length} milestones`,
-                  icon: TrendingUp, iconBg: "bg-blue-50", iconColor: "text-blue-600",
-                  trend: overallProgress > 0 ? { val: "+4.2%", up: true } : null,
-                },
-                {
-                  label: "Open Tickets", value: String(summary?.open ?? openTickets.length),
-                  sub: `${criticalCount} critical · ${highCount} high`,
-                  icon: AlertCircle, iconBg: criticalCount > 0 ? "bg-red-50" : "bg-gray-50",
-                  iconColor: criticalCount > 0 ? "text-red-500" : "text-gray-400",
-                  trend: criticalCount > 0 ? { val: `${criticalCount} critical`, up: false } : null,
-                },
-                {
-                  label: "Next Milestone",
-                  value: nextMilestone?.planned_date ? formatShortDate(nextMilestone.planned_date) : "—",
-                  sub: nextMilestone?.title?.slice(0, 22) ?? "No upcoming",
-                  icon: Calendar, iconBg: "bg-indigo-50", iconColor: "text-indigo-600",
-                  trend: null,
-                },
-                {
-                  label: "Documents", value: String(documents.length),
-                  sub: recentDocs[0] ? `Latest ${timeAgo(recentDocs[0].updated_at)}` : "No documents",
-                  icon: FileText, iconBg: "bg-slate-50", iconColor: "text-slate-500",
-                  trend: null,
-                },
-              ].map((k) => (
-                <div key={k.label} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-col justify-between gap-3">
-                  <div className="flex items-center justify-between">
-                    <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg", k.iconBg)}>
-                      <k.icon className={cn("h-4 w-4", k.iconColor)} strokeWidth={1.75} />
-                    </div>
-                    {k.trend && (
-                      <span className={cn("text-[10px] font-bold flex items-center gap-0.5", k.trend.up ? "text-emerald-600" : "text-red-500")}>
-                        {k.trend.up ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-                        {k.trend.val}
-                      </span>
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{k.label}</p>
-                    <p className="text-2xl font-bold text-slate-900 tracking-tight mt-0.5 tabular-nums">{k.value}</p>
-                    <p className="text-[10px] text-gray-400 mt-0.5 line-clamp-1">{k.sub}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <button
+              onClick={() => fetchData(true)}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-full border border-border bg-card hover:border-border/80 transition-all"
+            >
+              <RefreshCw className={cn("h-3 w-3", refreshing && "animate-spin")} />
+              {refreshing ? "Refreshing…" : lastUpdated ? `Updated ${timeAgo(lastUpdated.toISOString())}` : "Refresh"}
+            </button>
           </div>
+        </div>
 
-          {/* ── Milestone Marquee ────────────────────────────────────────── */}
-          {milestones.length > 0 && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <BarChart2 className="h-4 w-4 text-gray-400" />
-                  <span className="text-xs font-bold text-slate-900">All Milestones</span>
-                  <span className="text-[10px] font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{milestones.length} total</span>
-                </div>
-                <button onClick={() => navigate("/milestones")} className="text-[11px] font-semibold text-blue-600 flex items-center gap-1 hover:underline">
-                  View All <ChevronRight className="h-3.5 w-3.5" />
+        {/* ── KPI Row ───────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiCard label="Total Revenue"  value="$2.4M"
+            sub="from last week" trend={{ val: "12.5%", up: true }}
+            icon={TrendingUp} iconBg={BRAND}
+            sparkData={sparkRevenue} sparkColor={BRAND} />
+          <KpiCard label="Active Robots"  value="847"
+            sub="from last week" trend={{ val: "3.2%", up: true }}
+            icon={Activity} iconBg="#3b82f6"
+            sparkData={sparkRobots} sparkColor="#3b82f6" />
+          <KpiCard label="System Uptime"  value="99.97%"
+            sub="from last week" trend={{ val: "0.1%", up: true }}
+            icon={Wifi} iconBg="#10b981"
+            sparkData={sparkUptime} sparkColor="#10b981" />
+          <KpiCard label="Open Tickets"   value={String(summary?.open ?? openTickets.length)}
+            sub="from last week" trend={criticalCount > 0 ? { val: "8.7%", up: false } : null}
+            icon={AlertCircle} iconBg={criticalCount > 0 ? "#ef4444" : "#94a3b8"}
+            sparkData={sparkTickets} sparkColor={criticalCount > 0 ? "#ef4444" : "#94a3b8"} />
+        </div>
+
+        {/* ── Middle row: Active Project + Recent Activity ───────────────── */}
+        <div className="grid grid-cols-12 gap-5">
+
+          {/* Active Project — 8 cols */}
+          <div className="col-span-12 lg:col-span-8 bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <h2 className="text-sm font-bold text-foreground">Active Project</h2>
+              <div className="flex items-center gap-3">
+                <button onClick={() => navigate("/milestones")}
+                  className="text-[11px] font-semibold flex items-center gap-1 hover:underline"
+                  style={{ color: BRAND }}>
+                  View all <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <MarqueeStrip speed={Math.max(20, milestones.length * 6)}>
-                {milestones.map((m) => <ProjectCard key={m.id} milestone={m} />)}
-              </MarqueeStrip>
             </div>
-          )}
 
-          {/* ── Main 3-panel grid ────────────────────────────────────────── */}
-          <div className="grid grid-cols-12 gap-5 items-start">
-
-            {/* Milestone Timeline — 5 cols */}
-            <div className="col-span-12 lg:col-span-5 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-50">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">Milestone Timeline</h2>
-                  <p className="text-[11px] text-gray-400 mt-0.5">{milestones.length} milestones · {completedMilestones} completed</p>
-                </div>
-                <button onClick={() => navigate("/milestones")} className="text-[11px] font-semibold text-blue-600 flex items-center gap-0.5 hover:underline">
-                  Full Roadmap <ChevronRight className="h-3.5 w-3.5" />
-                </button>
+            <div className="p-6 flex gap-6">
+              {/* Robot thumb */}
+              <div className="hidden md:flex h-28 w-28 rounded-2xl items-center justify-center shrink-0 border border-border"
+                style={{ background: BRAND_LIGHT }}>
+                <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
+                  <circle cx="30" cy="22" r="12" stroke={BRAND} strokeWidth="2.5" />
+                  <rect x="18" y="34" width="24" height="14" rx="4" stroke={BRAND} strokeWidth="2.5" />
+                  <line x1="14" y1="37" x2="14" y2="44" stroke={BRAND} strokeWidth="2.5" strokeLinecap="round" />
+                  <line x1="46" y1="37" x2="46" y2="44" stroke={BRAND} strokeWidth="2.5" strokeLinecap="round" />
+                  <circle cx="26" cy="21" r="2" fill={BRAND} />
+                  <circle cx="34" cy="21" r="2" fill={BRAND} />
+                  <path d="M26 27 Q30 30 34 27" stroke={BRAND} strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                </svg>
               </div>
-              <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
-                {milestones.length === 0 && (
-                  <p className="text-sm text-gray-400 text-center py-12">No milestones yet.</p>
-                )}
-                {milestones.map((m, i) => {
-                  const progress = statusProgressMap[m.status] ?? 0;
-                  return (
-                    <div key={m.id} className="relative flex gap-4 px-6 py-4 hover:bg-gray-50/60 transition-colors group">
-                      {i < milestones.length - 1 && (
-                        <div className="absolute left-[39px] top-14 bottom-0 w-px bg-gray-100 z-0" />
-                      )}
-                      <div className={cn(
-                        "relative z-10 flex h-8 w-8 items-center justify-center rounded-full shrink-0 mt-0.5 border-2 transition-transform group-hover:scale-105",
-                        m.status === "completed"   ? "bg-emerald-500 border-emerald-500 text-white" :
-                        m.status === "in_progress" ? "bg-slate-900 border-slate-900 text-white" :
-                        m.status === "delayed"     ? "bg-amber-400 border-amber-400 text-white" :
-                        m.status === "cancelled"   ? "bg-red-400 border-red-400 text-white" :
-                        "bg-white border-gray-200 text-gray-400",
-                      )}>
-                        {m.status === "completed"   ? <CheckCircle2 className="h-4 w-4" strokeWidth={2.5} /> :
-                         m.status === "in_progress" ? <Activity className="h-4 w-4" strokeWidth={2} /> :
-                         m.status === "delayed"     ? <AlertCircle className="h-4 w-4" strokeWidth={2} /> :
-                         <Clock className="h-4 w-4" strokeWidth={2} />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-900 leading-tight">{m.title}</p>
-                            {m.description && (
-                              <p className="text-[11px] text-gray-400 mt-0.5 leading-relaxed line-clamp-2">{m.description}</p>
-                            )}
-                          </div>
-                          <div className="text-right shrink-0 pt-0.5">
-                            {m.planned_date && (
-                              <p className="text-[10px] font-mono text-gray-400">{formatDate(m.planned_date)}</p>
-                            )}
-                            {m.status === "in_progress" && (
-                              <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wider text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">Active</span>
-                            )}
-                            {m.status === "delayed" && (
-                              <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">Delayed</span>
-                            )}
-                            {m.status === "completed" && (
-                              <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">Done</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="mt-2.5 flex items-center gap-2">
-                          <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className={cn(
-                                "h-full rounded-full transition-all duration-500",
-                                m.status === "completed"   ? "bg-emerald-500" :
-                                m.status === "delayed"     ? "bg-amber-400" :
-                                m.status === "cancelled"   ? "bg-red-400" :
-                                m.status === "in_progress" ? "bg-blue-500" : "bg-gray-200"
-                              )}
-                              style={{ width: `${progress}%` }}
-                            />
-                          </div>
-                          <span className="text-[10px] font-bold text-gray-400 tabular-nums w-7 text-right">{progress}%</span>
-                        </div>
-                      </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-3 mb-2">
+                  <h3 className="text-base font-bold text-foreground">
+                    {nextMilestone?.title ?? "Autonomous Navigation v3.2"}
+                  </h3>
+                  <span className="text-[10px] font-bold px-2.5 py-1 rounded-full border"
+                    style={{ background: BRAND_LIGHT, color: BRAND, borderColor: "#fed7aa" }}>
+                    In Progress
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+                  {nextMilestone?.description ?? "Navigation system upgrades and performance optimization for better autonomy."}
+                </p>
+
+                {/* Progress */}
+                <div className="mb-4">
+                  <div className="flex justify-between mb-1.5">
+                    <span className="text-[11px] font-medium text-muted-foreground">Overall Progress</span>
+                    <span className="text-[11px] font-bold text-foreground">{overallProgress}%</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-700"
+                      style={{ width: `${overallProgress}%`, background: `linear-gradient(to right, ${BRAND}, ${BRAND_MID})` }} />
+                  </div>
+                </div>
+
+                {/* Meta row */}
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex items-center gap-5 text-xs text-muted-foreground">
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span>{nextMilestone?.planned_date ? formatDate(nextMilestone.planned_date) : "Dec 15, 2024"}</span>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Open Tickets — 4 cols */}
-            <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-50">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">Support Tickets</h2>
-                  <p className="text-[11px] text-gray-400 mt-0.5">{openTickets.length} open · {criticalCount} critical</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold bg-slate-900 text-white px-2 py-0.5 rounded-full">{openTickets.length}</span>
-                  <button onClick={() => navigate("/tickets")} className="text-[11px] text-blue-600 font-semibold flex items-center gap-0.5 hover:underline">
-                    All <ChevronRight className="h-3.5 w-3.5" />
+                    <div className="flex items-center gap-1.5">
+                      <AlertCircle className="h-3.5 w-3.5" style={{ color: BRAND }} />
+                      <span className="font-semibold" style={{ color: BRAND }}>High</span>
+                    </div>
+                    {/* Team avatars */}
+                    <div className="flex items-center">
+                      {["AC", "MK", "JL"].map((init, i) => (
+                        <div key={init}
+                          className="h-6 w-6 rounded-full border-2 border-card flex items-center justify-center text-[9px] font-bold text-white -ml-1.5 first:ml-0"
+                          style={{ background: i === 0 ? BRAND : i === 1 ? "#8b5cf6" : "#3b82f6", zIndex: 3 - i }}>
+                          {init}
+                        </div>
+                      ))}
+                      <div className="h-6 w-6 rounded-full border-2 border-card bg-muted flex items-center justify-center text-[9px] font-semibold text-muted-foreground -ml-1.5">+1</div>
+                    </div>
+                  </div>
+                  <button onClick={() => navigate("/milestones")}
+                    className="flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-xl text-white transition-all hover:opacity-90 shadow-sm"
+                    style={{ background: BRAND }}>
+                    View Project <ArrowUpRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
-              {openTickets.length > 0 && (
-                <div className="px-5 py-3 border-b border-gray-50 flex items-center gap-4">
-                  {[
-                    { label: "Critical", count: criticalCount,                                      color: "bg-red-500" },
-                    { label: "High",     count: highCount,                                           color: "bg-orange-400" },
-                    { label: "Other",    count: openTickets.length - criticalCount - highCount,      color: "bg-gray-300" },
-                  ].map((p) => (
-                    <div key={p.label} className="flex items-center gap-1.5">
-                      <span className={cn("h-2 w-2 rounded-full", p.color)} />
-                      <span className="text-[10px] text-gray-500 font-medium">{p.count} {p.label}</span>
-                    </div>
-                  ))}
-                </div>
+            </div>
+          </div>
+
+          {/* Recent Activity — 4 cols */}
+          <div className="col-span-12 lg:col-span-4 bg-card rounded-2xl border border-border shadow-sm overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-bold text-foreground">Recent Activity</h2>
+              <button className="text-[11px] font-semibold flex items-center gap-1 hover:underline" style={{ color: BRAND }}>
+                View all <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex-1 divide-y divide-border overflow-y-auto">
+              {recentActivity.length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-8">No recent activity.</p>
               )}
-              <div className="flex-1 divide-y divide-gray-50 overflow-y-auto">
-                {openTickets.length === 0 && (
-                  <p className="text-sm text-gray-400 text-center py-10">No open tickets.</p>
-                )}
-                {openTickets.slice(0, 8).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => navigate(`/tickets/${t.id}`)}
-                    className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50 transition-colors text-left group"
-                  >
+              {recentActivity.map((item) => {
+                const isTicket = item.type === "ticket";
+                const isCritical = item.priority === "critical";
+                return (
+                  <div key={item.id} className="flex items-start gap-3 px-5 py-3.5 hover:bg-muted/40 transition-colors">
                     <div className={cn(
-                      "h-2 w-2 rounded-full shrink-0",
-                      t.priority === "critical" ? "bg-red-500" :
-                      t.priority === "high"     ? "bg-orange-400" :
-                      t.priority === "medium"   ? "bg-amber-400" : "bg-gray-300",
-                    )} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-slate-900 truncate">{t.subject}</p>
-                      <p className="text-[10px] text-gray-400 mt-0.5">
-                        {t.ticket_id} · {t.assigned_to_name ?? "Unassigned"} · {timeAgo(t.updated_at)}
-                      </p>
-                    </div>
-                    <div className={cn(
-                      "text-[9px] font-bold uppercase px-2 py-0.5 rounded border shrink-0",
-                      t.status === "open"        ? "bg-blue-50 text-blue-600 border-blue-200" :
-                      t.status === "in_progress" ? "bg-slate-50 text-slate-600 border-slate-200" :
-                      t.status === "on_hold"     ? "bg-amber-50 text-amber-600 border-amber-200" :
-                      "bg-gray-50 text-gray-500 border-gray-200",
+                      "flex h-8 w-8 items-center justify-center rounded-lg shrink-0 mt-0.5",
+                      isTicket ? (isCritical ? "bg-red-500/10" : "bg-orange-500/10") : "bg-blue-500/10"
                     )}>
-                      {t.status?.replace("_", " ")}
+                      {isTicket
+                        ? <AlertCircle className="h-4 w-4" style={{ color: isCritical ? "#ef4444" : BRAND }} />
+                        : <FileText className="h-4 w-4 text-blue-500" />
+                      }
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-foreground leading-snug line-clamp-1">{item.title}</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">{item.sub}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className="text-[10px] text-muted-foreground">{timeAgo(item.time)}</span>
+                      <span className={cn("h-2 w-2 rounded-full",
+                        isCritical ? "bg-red-500" : isTicket ? "bg-amber-400" : "bg-purple-400")} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Bottom row ────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-12 gap-5">
+
+          {/* Upcoming Milestones — 5 cols */}
+          <div className="col-span-12 lg:col-span-5 bg-card rounded-2xl border border-border shadow-sm overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <div>
+                <h2 className="text-sm font-bold text-foreground">Upcoming Milestones</h2>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{milestones.length} milestones · {completedMilestones} completed</p>
+              </div>
+              <button onClick={() => navigate("/milestones")}
+                className="text-[11px] font-semibold flex items-center gap-0.5 hover:underline" style={{ color: BRAND }}>
+                View all <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex-1 divide-y divide-border overflow-y-auto">
+              {milestones.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-12">No milestones yet.</p>
+              )}
+              {milestones.slice(0, 6).map((m) => {
+                const progress = statusProgressMap[m.status] ?? 0;
+                const isCompleted = m.status === "completed";
+                const isActive    = m.status === "in_progress";
+                const isDelayed   = m.status === "delayed";
+                return (
+                  <div key={m.id} className="flex items-center gap-4 px-6 py-3.5 hover:bg-muted/40 transition-colors group">
+                    <div className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-full shrink-0 border-2 transition-transform group-hover:scale-105",
+                      isCompleted ? "border-emerald-500 bg-emerald-500 text-white" :
+                      isDelayed   ? "border-amber-400 bg-amber-400 text-white" :
+                      "border-border bg-card text-muted-foreground"
+                    )}
+                    style={isActive ? { borderColor: BRAND } : {}}>
+                      {isCompleted ? <CheckCircle2 className="h-4 w-4" strokeWidth={2.5} /> :
+                       isActive    ? <Activity className="h-4 w-4" style={{ color: BRAND }} strokeWidth={2} /> :
+                       isDelayed   ? <AlertCircle className="h-4 w-4" strokeWidth={2} /> :
+                       <Clock className="h-4 w-4" strokeWidth={2} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-foreground leading-tight truncate">{m.title}</p>
+                      {m.planned_date && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5">{formatDate(m.planned_date)}</p>
+                      )}
+                      {isActive && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${progress}%`, background: BRAND }} />
+                          </div>
+                          <span className="text-[10px] font-bold text-muted-foreground tabular-nums">{progress}%</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="shrink-0">
+                      {isCompleted && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-200 dark:border-emerald-900">
+                          Completed
+                        </span>
+                      )}
+                      {isActive && (
+                        <span className="text-[9px] font-bold px-2.5 py-1 rounded-full border"
+                          style={{ background: BRAND_LIGHT, color: BRAND, borderColor: "#fed7aa" }}>
+                          {progress}%
+                        </span>
+                      )}
+                      {!isCompleted && !isActive && !isDelayed && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-muted text-muted-foreground border border-border">
+                          Upcoming
+                        </span>
+                      )}
+                      {isDelayed && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 border border-amber-200 dark:border-amber-900">
+                          Delayed
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Support Overview — 4 cols */}
+          <div className="col-span-12 lg:col-span-4 bg-card rounded-2xl border border-border shadow-sm overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-bold text-foreground">Support Overview</h2>
+              <button onClick={() => navigate("/tickets")}
+                className="text-[11px] font-semibold flex items-center gap-1 hover:underline" style={{ color: BRAND }}>
+                View all <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex-1 px-5 py-5 flex flex-col justify-between gap-4">
+              <DonutChart
+                open={summary?.open ?? openTickets.length}
+                inProgress={inProgressTickets.length}
+                resolved={resolvedTickets.length}
+              />
+              {/* Priority bars */}
+              <div className="space-y-2 border-t border-border pt-4">
+                {[
+                  { label: "Critical", count: criticalCount,                                                         color: "#ef4444" },
+                  { label: "High",     count: highCount,                                                             color: BRAND },
+                  { label: "Medium",   count: openTickets.filter((t) => t.priority === "medium").length,             color: "#fbbf24" },
+                ].map((p) => (
+                  <div key={p.label} className="flex items-center gap-3">
+                    <span className="text-[11px] text-muted-foreground w-14">{p.label}</span>
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${(p.count / Math.max(openTickets.length, 1)) * 100}%`, background: p.color }} />
+                    </div>
+                    <span className="text-[11px] font-bold text-foreground w-4 text-right tabular-nums">{p.count}</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => navigate("/tickets")}
+                className="w-full flex items-center justify-center gap-1.5 text-xs font-bold py-2.5 rounded-xl transition-all hover:opacity-90"
+                style={{ background: BRAND_LIGHT, color: BRAND }}>
+                View All Tickets <ArrowUpRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Actions + Docs — 3 cols */}
+          <div className="col-span-12 lg:col-span-3 bg-card rounded-2xl border border-border shadow-sm overflow-hidden flex flex-col">
+            <div className="px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-bold text-foreground">Quick Actions</h2>
+            </div>
+            <div className="p-4 grid grid-cols-2 gap-3">
+              {[
+                { label: "Create Project",   icon: Plus,        iconBg: BRAND,      to: "/milestones" },
+                { label: "New Task",         icon: CheckSquare, iconBg: "#8b5cf6",  to: "/tasks" },
+                { label: "Upload Document",  icon: Upload,      iconBg: "#3b82f6",  to: "/documents" },
+                { label: "Contact Support",  icon: Headphones,  iconBg: "#10b981",  to: "/tickets" },
+              ].map((a) => (
+                <button key={a.label} onClick={() => navigate(a.to)}
+                  className="flex flex-col items-center gap-2.5 p-4 rounded-xl border border-border hover:border-border/60 bg-muted/40 hover:bg-muted/80 transition-all group text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl shadow-sm transition-transform group-hover:scale-105"
+                    style={{ background: a.iconBg }}>
+                    <a.icon className="h-5 w-5 text-white" strokeWidth={1.75} />
+                  </div>
+                  <span className="text-[11px] font-semibold text-foreground leading-tight">{a.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Recent Docs mini */}
+            <div className="border-t border-border px-5 py-3 flex-1">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[11px] font-bold text-foreground">Recent Documents</p>
+                <button onClick={() => navigate("/documents")} className="text-[10px] font-semibold hover:underline" style={{ color: BRAND }}>
+                  All
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {recentDocs.slice(0, 3).map((d) => (
+                  <button key={d.id} onClick={() => navigate("/documents")}
+                    className="w-full flex items-center gap-2 hover:bg-muted/60 px-1 py-1.5 rounded-lg transition-colors text-left">
+                    <div className="h-7 w-7 rounded-lg bg-muted flex items-center justify-center text-[8px] font-bold uppercase text-muted-foreground shrink-0">
+                      {d.file_type || "—"}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-medium text-foreground truncate">{d.title}</p>
+                      <p className="text-[10px] text-muted-foreground">{timeAgo(d.updated_at)}</p>
                     </div>
                   </button>
                 ))}
+                {recentDocs.length === 0 && (
+                  <p className="text-[11px] text-muted-foreground text-center py-3">No documents yet.</p>
+                )}
               </div>
-              <div className="px-5 py-3 border-t border-gray-50">
-                <button
-                  onClick={() => navigate("/tickets")}
-                  className="w-full text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-xl py-2 transition-colors"
-                >
-                  View All Tickets
-                </button>
-              </div>
-            </div>
-
-            {/* Right col — Activity + Documents + Quick Actions */}
-            <div className="col-span-12 lg:col-span-3 flex flex-col gap-5">
-
-              {/* Recent Activity */}
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-5 py-4 border-b border-gray-50">
-                  <h2 className="text-sm font-bold text-slate-900">Recent Activity</h2>
-                  <p className="text-[11px] text-gray-400 mt-0.5">Latest updates</p>
-                </div>
-                <div className="divide-y divide-gray-50">
-                  {tickets.slice(0, 2).map((t) => (
-                    <div key={t.id} className="flex gap-3 px-5 py-3.5">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-50 shrink-0 mt-0.5">
-                        <AlertCircle className="h-3.5 w-3.5 text-red-500" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-slate-900 leading-snug line-clamp-1">{t.subject}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{t.ticket_id} · {timeAgo(t.updated_at)}</p>
-                      </div>
-                    </div>
-                  ))}
-                  {recentDocs.slice(0, 2).map((d) => (
-                    <div key={d.id} className="flex gap-3 px-5 py-3.5">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 shrink-0 mt-0.5">
-                        <FileText className="h-3.5 w-3.5 text-blue-500" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-slate-900 leading-snug line-clamp-1">{d.title}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{d.category} · {timeAgo(d.updated_at)}</p>
-                      </div>
-                    </div>
-                  ))}
-                  {tickets.length === 0 && documents.length === 0 && (
-                    <p className="text-xs text-gray-400 text-center py-6">No recent activity.</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Documents */}
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-50">
-                  <div>
-                    <h2 className="text-sm font-bold text-slate-900">Documents</h2>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{documents.length} total</p>
-                  </div>
-                  <button onClick={() => navigate("/documents")} className="text-[11px] text-blue-600 font-semibold flex items-center gap-0.5 hover:underline">
-                    All <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <div className="divide-y divide-gray-50">
-                  {recentDocs.length === 0 && (
-                    <p className="text-xs text-gray-400 text-center py-6">No documents yet.</p>
-                  )}
-                  {recentDocs.map((d) => (
-                    <button
-                      key={d.id}
-                      onClick={() => navigate("/documents")}
-                      className="w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors text-left"
-                    >
-                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-[9px] font-bold uppercase text-slate-500 shrink-0">
-                        {d.file_type || "—"}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-slate-900 truncate">{d.title}</p>
-                        <p className="text-[10px] text-gray-400">{d.version} · {timeAgo(d.updated_at)}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Quick Actions */}
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-5 py-4 border-b border-gray-50">
-                  <h2 className="text-sm font-bold text-slate-900">Quick Actions</h2>
-                </div>
-                <div className="p-3 space-y-1.5">
-                  {[
-                    { label: "View Milestones", desc: "Project roadmap",    icon: Calendar,   iconBg: "bg-slate-900", iconColor: "text-white", to: "/milestones" },
-                    { label: "Open Documents",  desc: "Manuals & reports",  icon: FolderOpen, iconBg: "bg-slate-700", iconColor: "text-white", to: "/documents"  },
-                    { label: "Raise Ticket",    desc: "Request support",    icon: Plus,       iconBg: "bg-blue-600",  iconColor: "text-white", to: "/tickets"    },
-                  ].map((a) => (
-                    <button
-                      key={a.label}
-                      onClick={() => navigate(a.to)}
-                      className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 border border-transparent hover:border-gray-100 transition-all text-left group"
-                    >
-                      <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg shrink-0 transition-transform group-hover:scale-105", a.iconBg)}>
-                        <a.icon className={cn("h-4 w-4", a.iconColor)} strokeWidth={1.75} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-slate-900">{a.label}</p>
-                        <p className="text-[10px] text-gray-400">{a.desc}</p>
-                      </div>
-                      <ChevronRight className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500 transition-colors" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-
             </div>
           </div>
 
-          {/* ── Footer ───────────────────────────────────────────────────── */}
-          <footer className="pt-5 pb-2 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-gray-400">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-900">DMW Robotics</span>
-              <span>© 2023 DMW Industrial Systems GMBH</span>
-            </div>
-            <div className="flex items-center gap-5">
-              {["Security Policy", "API Docs", "Privacy", "Terms of Service"].map((l) => (
-                <button key={l} className="hover:text-slate-900 transition-colors">{l}</button>
-              ))}
-            </div>
-          </footer>
-
         </div>
+
+        {/* ── Footer ────────────────────────────────────────────────────── */}
+        <footer className="pt-4 pb-2 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-foreground">DMW Robotics</span>
+            <span>© 2023 DMW Industrial Systems GMBH</span>
+          </div>
+          <div className="flex items-center gap-5">
+            {["Security Policy", "API Docs", "Privacy", "Terms of Service"].map((l) => (
+              <button key={l} className="hover:text-foreground transition-colors">{l}</button>
+            ))}
+          </div>
+        </footer>
+
       </div>
-    </>
+    </div>
   );
 }

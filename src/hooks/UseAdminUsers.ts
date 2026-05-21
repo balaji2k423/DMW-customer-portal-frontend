@@ -14,8 +14,15 @@ export type GuestPermission = {
 
 export type GuestPermissionPayload = Omit<GuestPermission, "id">;
 
+// "Customer" in this context is a CustomUser (customer_admin / customer_user)
+// belonging to a company — NOT company_master.Customer.
 export type Customer = {
   id: number;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  // Derived helper so existing UI that reads `.name` still works
   name: string;
 };
 
@@ -25,7 +32,6 @@ export type Project = {
   customer_id?: number;
 };
 
-/** Matches company_master.Company */
 export type Company = {
   id: number;
   company_name: string;
@@ -73,12 +79,8 @@ export function useDeleteUser() {
   });
 }
 
-// ─── Company hook (fetches from company master) ───────────────────────────────
+// ─── Company hook ─────────────────────────────────────────────────────────────
 
-/**
- * Fetches all companies from the company master endpoint.
- * Used to populate the mandatory company dropdown on the user create/edit form.
- */
 export function useCompanies() {
   return useQuery<Company[]>({
     queryKey: ["admin", "companies"],
@@ -86,7 +88,7 @@ export function useCompanies() {
       api
         .get("/company/companies/")
         .then(r => (Array.isArray(r.data) ? r.data : (r.data.results ?? []))),
-    staleTime: 5 * 60 * 1000, // cache for 5 min — company list rarely changes
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -124,17 +126,58 @@ export function useSaveGuestPermissions() {
   });
 }
 
-// ─── Customer + Project hooks (for permission dropdowns) ─────────────────────
+// ─── Users by company ─────────────────────────────────────────────────────────
+//
+// Fetches CustomUsers with role customer_admin / customer_user whose
+// `company` CharField matches the selected company's name.
+// Replaces the old useCustomersByCompany which queried company_master.Customer
+// (a table that has no data in this project).
 
-export function useCustomers() {
+export function useCustomersByCompany(companyId: number | null) {
   return useQuery<Customer[]>({
-    queryKey: ["admin", "customers"],
+    queryKey: ["admin", "users-by-company", companyId],
     queryFn: () =>
       api
-        .get("/customers/")
-        .then(r => (Array.isArray(r.data) ? r.data : (r.data.results ?? []))),
+        .get("/auth/admin/users-by-company/", {
+          params: { company_id: companyId },
+        })
+        .then(r => {
+          const raw: any[] = Array.isArray(r.data)
+            ? r.data
+            : (r.data.results ?? []);
+          // Attach a `.name` field so the modal UI (which renders c.name) works
+          return raw.map(u => ({
+            ...u,
+            name: `${u.first_name} ${u.last_name}`.trim() || u.email,
+          }));
+        }),
+    enabled: companyId !== null,
+    staleTime: 2 * 60 * 1000,
   });
 }
+
+// ─── All customers (no filter) ────────────────────────────────────────────────
+
+export function useAllCustomers() {
+  return useQuery<Customer[]>({
+    queryKey: ["admin", "users-by-company", "all"],
+    queryFn: () =>
+      api
+        .get("/auth/admin/users-by-company/")
+        .then(r => {
+          const raw: any[] = Array.isArray(r.data)
+            ? r.data
+            : (r.data.results ?? []);
+          return raw.map(u => ({
+            ...u,
+            name: `${u.first_name} ${u.last_name}`.trim() || u.email,
+          }));
+        }),
+    staleTime: 2 * 60 * 1000,
+  });
+}
+
+// ─── Project hook ─────────────────────────────────────────────────────────────
 
 export function useProjects(customerId: number | null) {
   return useQuery<Project[]>({
