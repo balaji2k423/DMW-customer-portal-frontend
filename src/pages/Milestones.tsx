@@ -5,7 +5,7 @@ import {
   ArrowLeft, Plus, X, ChevronDown, ChevronRight,
   ListTodo, Trash2, Check, Circle, ShieldCheck,
   GripVertical, BarChart3, Layers, Users, Building2,
-  FolderOpen, ArrowUpRight,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -17,7 +17,7 @@ import {
 } from "@/services/milestones";
 import { useAuth } from "@/contexts/AuthContext";
 
-/* ─── Brand tokens (matches Dashboard) ─── */
+/* ─── Brand tokens ─── */
 const BRAND       = "#E8510A";
 const BRAND_LIGHT = "#FEF0E9";
 const BRAND_MID   = "#F97316";
@@ -32,7 +32,6 @@ const STATUS_MAP: Record<string, UiStatus> = {
   completed: "completed", delayed: "delayed", cancelled: "cancelled",
 };
 
-/* Status config aligned to brand palette */
 const S = {
   completed: {
     label: "Completed", dot: "bg-emerald-500",
@@ -74,10 +73,10 @@ const S = {
 type SubtaskStatus = Subtask["status"] | "approved";
 
 const ST: Record<SubtaskStatus, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
-  todo:        { label: "To Do",       color: "text-muted-foreground",      bg: "bg-muted text-muted-foreground",                               icon: <Circle className="h-4 w-4" />        },
-  in_progress: { label: "In Progress", color: "text-orange-500",            bg: "bg-orange-500/10 text-orange-600 dark:text-orange-400",         icon: <Activity className="h-4 w-4" />      },
-  done:        { label: "Done",        color: "text-emerald-500",           bg: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",      icon: <CheckCircle2 className="h-4 w-4" />  },
-  approved:    { label: "Approved",    color: "text-violet-500",            bg: "bg-violet-500/10 text-violet-700 dark:text-violet-400",         icon: <ShieldCheck className="h-4 w-4" />   },
+  todo:        { label: "To Do",       color: "text-muted-foreground",  bg: "bg-muted text-muted-foreground",                               icon: <Circle className="h-4 w-4" />        },
+  in_progress: { label: "In Progress", color: "text-orange-500",        bg: "bg-orange-500/10 text-orange-600 dark:text-orange-400",         icon: <Activity className="h-4 w-4" />      },
+  done:        { label: "Done",        color: "text-emerald-500",       bg: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",      icon: <CheckCircle2 className="h-4 w-4" />  },
+  approved:    { label: "Approved",    color: "text-violet-500",        bg: "bg-violet-500/10 text-violet-700 dark:text-violet-400",         icon: <ShieldCheck className="h-4 w-4" />   },
 };
 
 function initials(name: string) { return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2); }
@@ -106,7 +105,7 @@ function Divider({ label }: { label: string }) {
   );
 }
 
-/* ─── KPI Stat card (matches dashboard style) ─── */
+/* ─── KPI Stat card ─── */
 function StatCard({ value, label, iconBg, textColor }: { value: number; label: string; iconBg: string; textColor: string }) {
   return (
     <div className="bg-card rounded-2xl border border-border shadow-sm p-5 flex flex-col gap-3">
@@ -153,21 +152,23 @@ function ApproveModal({ title, description, loading, onConfirm, onClose }: {
 }
 
 /* ─── Subtask row ─── */
-function SubtaskRow({ subtask, canManage, onToggle, onDelete, onApprove }: {
-  subtask: Subtask & { status: SubtaskStatus }; canManage: boolean;
+function SubtaskRow({ subtask, canManage, isApproved, onToggle, onDelete, onApprove }: {
+  subtask: Subtask & { status: SubtaskStatus };
+  canManage: boolean;
+  isApproved: boolean;
   onToggle: (id: number, next: Subtask["status"]) => void;
   onDelete: (id: number) => void;
   onApprove: (id: number) => void;
 }) {
   const cfg = ST[subtask.status] ?? ST.todo;
-  const isApproved = subtask.status === "approved";
   const nextMap: Record<string, Subtask["status"]> = { todo: "in_progress", in_progress: "done", done: "todo" };
 
   return (
     <div className={cn(
       "group flex items-center gap-3 rounded-xl border px-4 py-3 transition-all duration-150",
-      isApproved ? "border-violet-200 dark:border-violet-500/20 bg-violet-50/40 dark:bg-violet-500/5"
-                 : "border-border bg-card hover:bg-muted/40 hover:border-border/60"
+      isApproved
+        ? "border-violet-200 dark:border-violet-500/20 bg-violet-50/40 dark:bg-violet-500/5"
+        : "border-border bg-card hover:bg-muted/40 hover:border-border/60"
     )}>
       <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/20 group-hover:text-muted-foreground/40 cursor-grab" />
       {canManage && !isApproved ? (
@@ -175,7 +176,8 @@ function SubtaskRow({ subtask, canManage, onToggle, onDelete, onApprove }: {
       ) : (
         <span className={cn("shrink-0", cfg.color)}>{cfg.icon}</span>
       )}
-      <span className={cn("flex-1 text-[14px] leading-snug",
+      <span className={cn(
+        "flex-1 text-[14px] leading-snug",
         isApproved ? "text-muted-foreground/40 line-through" : "font-medium",
         subtask.status === "done" && !isApproved && "text-muted-foreground/60"
       )}>
@@ -187,7 +189,7 @@ function SubtaskRow({ subtask, canManage, onToggle, onDelete, onApprove }: {
         </div>
       )}
       <span className={cn("rounded-lg px-2.5 py-1 text-[11px] font-semibold", cfg.bg)}>{cfg.label}</span>
-      {canManage && subtask.status === "done" && (
+      {canManage && subtask.status === "done" && !isApproved && (
         <button onClick={() => onApprove(subtask.id)} className="shrink-0 flex items-center gap-1.5 rounded-lg border border-violet-200 dark:border-violet-500/30 bg-violet-50 dark:bg-violet-500/10 px-3 py-1.5 text-[11px] font-semibold text-violet-600 dark:text-violet-400 opacity-0 group-hover:opacity-100 transition-all">
           <ShieldCheck className="h-3.5 w-3.5" /> Approve
         </button>
@@ -219,11 +221,13 @@ function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMi
   const [approveStId, setApproveStId]   = useState<number | null>(null);
   const [approvingSt, setApprovingSt]   = useState(false);
 
-  const pct         = calcProgress({ ...milestone, subtasks });
+  // Derive signed-off state from EITHER field — guards against partial API responses
+  const isSignedOff = !!(milestone.sign_off || milestone.is_signed_off);
+  const isApproved  = isSignedOff;
+
   const doneCount   = subtasks.filter(s => s.status === "done" || (s as any).status === "approved").length;
   const approvedCnt = subtasks.filter(s => (s as any).status === "approved").length;
   const allDone     = subtasks.length > 0 && subtasks.every(s => s.status === "done" || (s as any).status === "approved");
-  const isApproved  = milestone.status === "completed" && milestone.is_signed_off;
 
   useEffect(() => { const id = requestAnimationFrame(() => setMounted(true)); return () => cancelAnimationFrame(id); }, []);
 
@@ -290,7 +294,7 @@ function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMi
                 <span className={cn("mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle bg-current", st === "in-progress" && "animate-pulse")} />
                 {cfg.label}
               </span>
-              {milestone.is_signed_off && (
+              {isSignedOff && (
                 <span className="flex items-center gap-1.5 rounded-lg border border-emerald-200 dark:border-emerald-500/25 bg-emerald-50 dark:bg-emerald-500/10 px-3 py-1.5 text-[12px] font-semibold text-emerald-700 dark:text-emerald-400">
                   <BadgeCheck className="h-3.5 w-3.5" /> Signed off
                 </span>
@@ -334,36 +338,34 @@ function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMi
             </div>
           </div>
 
-          {/* Progress */}
-          <div className="mt-6 max-w-md space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[13px] font-semibold text-muted-foreground">
-                {subtasks.length > 0 ? `${doneCount} of ${subtasks.length} subtasks complete` : "Progress"}
-                {approvedCnt > 0 && <span className="ml-2 text-violet-500">· {approvedCnt} approved</span>}
-              </span>
-              <span className={cn("text-[15px] font-black tabular-nums", cfg.text)}>{pct}%</span>
-            </div>
-            <div className="h-3 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full transition-all duration-1000 delay-300" style={{ width: mounted ? `${pct}%` : "0%", background: cfg.bar }} />
-            </div>
-          </div>
-
-          {canApprove && !isApproved && milestone.status !== "cancelled" && (
-            <div className="mt-5 flex items-center gap-3">
-              <button onClick={() => setShowApproveM(true)} disabled={subtasks.length > 0 && !allDone}
-                className={cn("flex items-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-semibold transition-all",
-                  allDone || subtasks.length === 0 ? "text-white hover:opacity-90" : "bg-muted text-muted-foreground/40 cursor-not-allowed"
+          {/* ─── FIX: Authorize Milestone button — visible to admin, project_manager AND customer_admin ─── */}
+          {canApprove &&
+           !isSignedOff &&
+           milestone.status !== "cancelled" && (
+            <div className="mt-6 flex items-center gap-3">
+              <button
+                onClick={() => setShowApproveM(true)}
+                disabled={subtasks.length > 0 && !allDone}
+                className={cn(
+                  "flex items-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-semibold transition-all",
+                  allDone || subtasks.length === 0
+                    ? "text-white hover:opacity-90"
+                    : "bg-muted text-muted-foreground/40 cursor-not-allowed"
                 )}
                 style={allDone || subtasks.length === 0 ? { background: BRAND } : {}}>
-                <ShieldCheck className="h-4 w-4" /> Approve Milestone
+                <ShieldCheck className="h-4 w-4" />
+                Authorize Milestone
               </button>
-              {subtasks.length > 0 && !allDone && <span className="text-[13px] text-muted-foreground/50">Complete all subtasks first</span>}
+              {subtasks.length > 0 && !allDone && (
+                <span className="text-[13px] text-muted-foreground/50">Complete all subtasks first</span>
+              )}
             </div>
           )}
         </div>
 
         {/* Body */}
         <div className="px-6 py-8 space-y-10">
+
           {/* Subtasks */}
           <section>
             <div className="mb-4 flex items-center justify-between">
@@ -375,6 +377,11 @@ function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMi
                 {subtasks.length > 0 && (
                   <span className="rounded-lg px-2.5 py-1 text-[12px] font-semibold text-white" style={{ background: BRAND }}>
                     {doneCount}/{subtasks.length}
+                  </span>
+                )}
+                {approvedCnt > 0 && (
+                  <span className="rounded-lg px-2.5 py-1 text-[12px] font-semibold bg-violet-500/10 text-violet-600 dark:text-violet-400">
+                    {approvedCnt} approved
                   </span>
                 )}
               </div>
@@ -399,16 +406,28 @@ function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMi
 
             <div className="space-y-2">
               {subtasks.map(s => (
-                <SubtaskRow key={s.id} subtask={s as any} canManage={canManage} onToggle={toggleSubtask} onDelete={deleteSubtask} onApprove={setApproveStId} />
+                <SubtaskRow
+                  key={s.id}
+                  subtask={s as any}
+                  canManage={canManage}
+                  isApproved={isApproved}
+                  onToggle={toggleSubtask}
+                  onDelete={deleteSubtask}
+                  onApprove={setApproveStId}
+                />
               ))}
             </div>
 
             {showInput && !isApproved && (
               <div className="mt-3 flex gap-2.5">
-                <input autoFocus className="flex-1 rounded-xl border border-orange-300 dark:border-orange-500/40 bg-background px-4 py-2.5 text-[14px] outline-none ring-2 ring-orange-400/15 placeholder:text-muted-foreground/30"
-                  placeholder="What needs to be done?" value={newTask}
+                <input
+                  autoFocus
+                  className="flex-1 rounded-xl border border-orange-300 dark:border-orange-500/40 bg-background px-4 py-2.5 text-[14px] outline-none ring-2 ring-orange-400/15 placeholder:text-muted-foreground/30"
+                  placeholder="What needs to be done?"
+                  value={newTask}
                   onChange={e => setNewTask(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") addSubtask(); if (e.key === "Escape") { setShowInput(false); setNewTask(""); } }} />
+                  onKeyDown={e => { if (e.key === "Enter") addSubtask(); if (e.key === "Escape") { setShowInput(false); setNewTask(""); } }}
+                />
                 <button onClick={addSubtask} disabled={adding || !newTask.trim()}
                   className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-[13px] font-semibold text-white disabled:opacity-50 hover:opacity-90 transition-all"
                   style={{ background: BRAND }}>
@@ -456,7 +475,7 @@ function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMi
             </div>
           )}
 
-          {/* Sign-off */}
+          {/* Sign-off record */}
           {milestone.sign_off && (
             <div className="flex gap-3.5 rounded-2xl border border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-500/5 px-5 py-4">
               <BadgeCheck className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
@@ -470,8 +489,24 @@ function MilestoneDetail({ milestone, index, onBack, canManage, canApprove, onMi
         </div>
       </div>
 
-      {showApproveM && <ApproveModal title="Approve this milestone?" description={`Mark "${milestone.title}" as completed and approved. This will be permanently recorded.`} loading={approvingM} onConfirm={approveMilestone} onClose={() => setShowApproveM(false)} />}
-      {approveStId !== null && <ApproveModal title="Approve subtask?" description={`Approve "${subtasks.find(s => s.id === approveStId)?.title}"? This action cannot be undone.`} loading={approvingSt} onConfirm={approveSubtask} onClose={() => setApproveStId(null)} />}
+      {showApproveM && (
+        <ApproveModal
+          title="Approve this milestone?"
+          description={`Mark "${milestone.title}" as completed and approved. This will be permanently recorded.`}
+          loading={approvingM}
+          onConfirm={approveMilestone}
+          onClose={() => setShowApproveM(false)}
+        />
+      )}
+      {approveStId !== null && (
+        <ApproveModal
+          title="Approve subtask?"
+          description={`Approve "${subtasks.find(s => s.id === approveStId)?.title}"? This action cannot be undone.`}
+          loading={approvingSt}
+          onConfirm={approveSubtask}
+          onClose={() => setApproveStId(null)}
+        />
+      )}
     </>
   );
 }
@@ -493,7 +528,8 @@ function FilterDropdown<T extends { id: string | number; name: string }>({
   return (
     <div className="relative" ref={ref}>
       <button onClick={() => setOpen(v => !v)}
-        className={cn("flex min-w-[160px] items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[13px] font-semibold transition-all",
+        className={cn(
+          "flex min-w-[160px] items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[13px] font-semibold transition-all",
           open || selectedId
             ? "border-orange-300 dark:border-orange-500/40 bg-orange-50 dark:bg-orange-500/5 text-orange-600 dark:text-orange-400"
             : "border-border bg-card hover:bg-muted/50 text-muted-foreground hover:text-foreground"
@@ -648,7 +684,9 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
   const isAdmin         = user?.role === "admin";
   const isManager       = user?.role === "project_manager";
   const canManage       = isAdmin || isManager;
-  const canApprove      = isAdmin || isManager;
+
+  // ── FIX: admin and project_manager can also authorize milestones ──
+  const canApprove      = user?.role === "customer_admin" || isAdmin || isManager;
 
   const [projects, setProjects]                   = useState<ProjectOption[]>([]);
   const [customers, setCustomers]                 = useState<CustomerOption[]>([]);
@@ -664,33 +702,34 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
   const [customersLoading, setCustomersLoading]   = useState(true);
   const [customerAdminsLoading, setCustomerAdminsLoading] = useState(true);
 
+  // ── BUG FIX: filter customer admins by the selected company ───────────────
+  // When a company is selected, only show admins whose `company` field matches.
+  // This fixes the bug where all admins showed regardless of which customer was picked.
+  const filteredCustomerAdmins: CustomerAdminOption[] = activeCustomerId
+    ? customerAdmins.filter(ca => ca.company === activeCustomerId)
+    : customerAdmins;
+
+  // ── Bug fix: filter projects by BOTH active customer and active admin ──────
   const filteredProjects: ProjectOption[] = (() => {
-    if (!activeCustomerAdminId) return projects;
-    const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
-    if (!admin) return projects;
-    const ids = admin.project_ids ?? [];
-    return ids.length > 0 ? projects.filter(p => ids.includes(p.id)) : projects;
+    let result = projects;
+
+    // 1. Filter by selected customer (company name)
+    if (activeCustomerId) {
+      result = result.filter(p => p.customer_id === activeCustomerId || p.customer_name === activeCustomerId);
+    }
+
+    // 2. Further narrow by selected customer admin's project_ids (if any)
+    if (activeCustomerAdminId) {
+      const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
+      if (admin?.project_ids?.length) {
+        result = result.filter(p => admin.project_ids.includes(p.id));
+      }
+    }
+
+    return result;
   })();
 
-  useEffect(() => {
-    milestonesService.listProjects().then(ps => {
-      setProjects(ps);
-      if (!propProjectId && !canManage && ps.length > 0) setActiveProjectId(ps[0].id);
-    }).catch(() => {});
-    milestonesService.listCustomers().then(cs => { if (cs?.length > 0) setCustomers(cs); }).catch(() => {}).finally(() => setCustomersLoading(false));
-    if (canManage) {
-      milestonesService.listCustomerAdmins().then(cas => { if (cas?.length > 0) setCustomerAdmins(cas); }).catch(() => {}).finally(() => setCustomerAdminsLoading(false));
-    } else { setCustomerAdminsLoading(false); }
-  }, []);
-
-  useEffect(() => { setActiveProjectId(propProjectId); }, [propProjectId]);
-  useEffect(() => {
-    if (!activeCustomerAdminId) return;
-    const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
-    if (!admin) return;
-    setActiveProjectId(prev => prev != null && admin.project_ids.includes(prev) ? prev : undefined);
-  }, [activeCustomerAdminId, customerAdmins]);
-
+  // ── Single load function ───────────────────────────────────────────────────
   const load = (pid?: number, cid?: number | string, caid?: number) => {
     setLoading(true); setError(null);
     milestonesService.list(pid, cid, caid)
@@ -699,9 +738,73 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(activeProjectId, activeCustomerId, activeCustomerAdminId); }, [activeProjectId]);
-  useEffect(() => { if (!activeProjectId) load(undefined, activeCustomerId, activeCustomerAdminId); }, [activeCustomerId]);
-  useEffect(() => { if (!activeProjectId) load(undefined, activeCustomerId, activeCustomerAdminId); }, [activeCustomerAdminId]);
+  // ── Bootstrap: load reference data, then auto-select defaults ─────────────
+  useEffect(() => {
+    Promise.all([
+      milestonesService.listProjects().catch(() => [] as ProjectOption[]),
+      milestonesService.listCustomers().catch(() => [] as { id: number | string; name: string }[]),
+      canManage
+        ? milestonesService.listCustomerAdmins().catch(() => [] as CustomerAdminOption[])
+        : Promise.resolve([] as CustomerAdminOption[]),
+    ]).then(([ps, cs, cas]) => {
+      setProjects(ps);
+      if (cs?.length > 0) setCustomers(cs);
+      if (cas?.length > 0) setCustomerAdmins(cas);
+      setCustomersLoading(false);
+      setCustomerAdminsLoading(false);
+
+      if (propProjectId) {
+        // Parent locked a project — load it immediately
+        load(propProjectId, undefined, undefined);
+        return;
+      }
+
+      if (!canManage && ps.length > 0) {
+        // Customer users: auto-select their first project
+        setActiveProjectId(ps[0].id);
+        load(ps[0].id, undefined, undefined);
+        return;
+      }
+
+      // Admin / PM: auto-select first customer → first project in that customer
+      if (cs?.length > 0) {
+        const firstCustomer = cs[0];
+        setActiveCustomerId(firstCustomer.id);
+
+        // Find which projects belong to this customer
+        const customerProjects = ps.filter(
+          p => p.customer_id === firstCustomer.id || p.customer_name === firstCustomer.id
+        );
+        const firstProject = customerProjects[0] ?? ps[0];
+        if (firstProject) {
+          setActiveProjectId(firstProject.id);
+          load(firstProject.id, firstCustomer.id, undefined);
+        } else {
+          load(undefined, firstCustomer.id, undefined);
+        }
+      } else if (ps.length > 0) {
+        // No customers returned — fall back to first project
+        setActiveProjectId(ps[0].id);
+        load(ps[0].id, undefined, undefined);
+      } else {
+        load(undefined, undefined, undefined);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Sync prop project id ───────────────────────────────────────────────────
+  useEffect(() => { setActiveProjectId(propProjectId); }, [propProjectId]);
+
+  // ── Re-load whenever any filter changes ───────────────────────────────────
+  // Use a single effect keyed on all three to avoid race conditions from
+  // three independent effects firing in the same render cycle.
+  useEffect(() => {
+    // Skip the very first render — the bootstrap effect above handles it
+    if (loading) return;
+    load(activeProjectId, activeCustomerId, activeCustomerAdminId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProjectId, activeCustomerId, activeCustomerAdminId]);
 
   const handleMUpdate = (m: Milestone) => {
     setMilestones(p => p.map(x => x.id === m.id ? m : x));
@@ -766,13 +869,62 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
               </div>
               <div className="flex flex-wrap items-center gap-2.5">
                 {!customersLoading && (
-                  <FilterDropdown<CustomerOption> options={customers} selectedId={activeCustomerId} allLabel="All Customers" onChange={id => { setActiveCustomerId(id); setActiveProjectId(undefined); setSelected(null); }} icon={<Building2 className="h-3.5 w-3.5" />} />
+                  <FilterDropdown<CustomerOption>
+                    options={customers}
+                    selectedId={activeCustomerId}
+                    allLabel="All Customers"
+                    onChange={id => {
+                      setActiveCustomerId(id);
+                      // BUG FIX: reset admin selection whenever company changes
+                      // so a previously-selected admin from another company isn't kept
+                      setActiveCustomerAdminId(undefined);
+                      setSelected(null);
+                      // Auto-select the first project that belongs to this customer
+                      if (id) {
+                        const customerProjects = projects.filter(
+                          p => p.customer_id === id || p.customer_name === id
+                        );
+                        const firstProject = customerProjects[0];
+                        setActiveProjectId(firstProject?.id);
+                      } else {
+                        setActiveProjectId(undefined);
+                      }
+                    }}
+                    icon={<Building2 className="h-3.5 w-3.5" />}
+                  />
                 )}
-                {canManage && !customerAdminsLoading && customerAdmins.length > 0 && (
-                  <FilterDropdown<CustomerAdminOption> options={customerAdmins} selectedId={activeCustomerAdminId} allLabel="All Admins" onChange={id => { setActiveCustomerAdminId(id as number | undefined); setActiveProjectId(undefined); setSelected(null); }} icon={<Users className="h-3.5 w-3.5" />} />
+                {canManage && !customerAdminsLoading && filteredCustomerAdmins.length > 0 && (
+                  <FilterDropdown<CustomerAdminOption>
+                    options={filteredCustomerAdmins}
+                    selectedId={activeCustomerAdminId}
+                    allLabel="All Admins"
+                    onChange={id => {
+                      setActiveCustomerAdminId(id as number | undefined);
+                      setSelected(null);
+                      // Narrow project to admin's first project if current selection is outside their scope
+                      if (id) {
+                        const admin = customerAdmins.find(ca => ca.id === id);
+                        if (admin?.project_ids?.length) {
+                          setActiveProjectId(prev =>
+                            prev != null && admin.project_ids.includes(prev)
+                              ? prev
+                              : admin.project_ids[0]
+                          );
+                        }
+                      }
+                    }}
+                    icon={<Users className="h-3.5 w-3.5" />}
+                  />
                 )}
                 {projects.length > 0 && (
-                  <FilterDropdown<ProjectOption> options={filteredProjects} selectedId={activeProjectId} allLabel="All Projects" showAll={canManage} onChange={id => { setActiveProjectId(id as number | undefined); setSelected(null); }} icon={<FolderOpen className="h-3.5 w-3.5" />} />
+                  <FilterDropdown<ProjectOption>
+                    options={filteredProjects}
+                    selectedId={activeProjectId}
+                    allLabel="All Projects"
+                    showAll={canManage}
+                    onChange={id => { setActiveProjectId(id as number | undefined); setSelected(null); }}
+                    icon={<FolderOpen className="h-3.5 w-3.5" />}
+                  />
                 )}
                 {canManage && (
                   <button onClick={() => setShowCreate(true)}
@@ -792,7 +944,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
               <StatCard value={delayed}    label="Delayed"     iconBg="#ef4444"    textColor="text-rose-600 dark:text-rose-400" />
             </div>
 
-            {/* Progress bar */}
+            {/* Overall progress bar */}
             {total > 0 && (
               <div className="bg-card rounded-2xl border border-border shadow-sm px-6 py-4">
                 <div className="flex items-center justify-between mb-3">
@@ -865,7 +1017,11 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
                               </span>
                             </div>
                             <div className="flex flex-wrap items-center gap-3">
-                              {m.is_signed_off && <span className="flex items-center gap-1 text-[12px] font-semibold text-emerald-600 dark:text-emerald-400"><BadgeCheck className="h-3.5 w-3.5" /> Signed off</span>}
+                              {(m.is_signed_off || m.sign_off) && (
+                                <span className="flex items-center gap-1 text-[12px] font-semibold text-emerald-600 dark:text-emerald-400">
+                                  <BadgeCheck className="h-3.5 w-3.5" /> Signed off
+                                </span>
+                              )}
                               {stCount > 0 && <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground/60"><ListTodo className="h-3.5 w-3.5" />{doneSt}/{stCount} subtasks</span>}
                               {projLabel && <span className="rounded-lg bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground/50">{projLabel}</span>}
                             </div>
@@ -894,9 +1050,7 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
                             )}
                           </div>
 
-                          <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/20 transition-all group-hover:translate-x-0.5" style={{ color: undefined }}
-                            // brand color on hover handled via group
-                          />
+                          <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/20 transition-all group-hover:translate-x-0.5" />
                         </div>
                       </button>
                     );
@@ -921,14 +1075,25 @@ export default function Milestones({ projectId: propProjectId }: { projectId?: n
 
           {/* Detail slide-in */}
           {selected && (
-            <MilestoneDetail milestone={selected.milestone} index={selected.index}
-              onBack={() => setSelected(null)} canManage={canManage} canApprove={canApprove}
-              onMilestoneUpdate={handleMUpdate} onSubtaskChange={handleStChange} />
+            <MilestoneDetail
+              milestone={selected.milestone}
+              index={selected.index}
+              onBack={() => setSelected(null)}
+              canManage={canManage}
+              canApprove={canApprove}
+              onMilestoneUpdate={handleMUpdate}
+              onSubtaskChange={handleStChange}
+            />
           )}
         </div>
 
         {showCreate && canManage && (
-          <MilestoneCreateModal preselectedProjectId={activeProjectId} projects={filteredProjects} onSave={handleCreate} onClose={() => setShowCreate(false)} />
+          <MilestoneCreateModal
+            preselectedProjectId={activeProjectId}
+            projects={filteredProjects}
+            onSave={handleCreate}
+            onClose={() => setShowCreate(false)}
+          />
         )}
       </div>
     </div>

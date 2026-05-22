@@ -64,11 +64,10 @@ const STATUS_CFG = {
 const inputCls = "w-full rounded-xl border border-border bg-background px-4 py-2.5 text-[14px] outline-none transition-all focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 placeholder:text-muted-foreground/30";
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Upload Modal
+   Upload Modal  — cascades Company → Customer Admin → Project
 ───────────────────────────────────────────────────────────────────────────── */
 interface UploadModalProps {
   projectId?: number;
-  projects?: ProjectOption[];
   onClose: () => void;
   onSuccess: (doc: Document) => void;
 }
@@ -82,7 +81,7 @@ const CATEGORIES = [
   { value: "other",         label: "Other" },
 ];
 
-function UploadModal({ projectId, projects: propProjects, onClose, onSuccess }: UploadModalProps) {
+function UploadModal({ projectId, onClose, onSuccess }: UploadModalProps) {
   const [title, setTitle]       = useState("");
   const [desc, setDesc]         = useState("");
   const [category, setCategory] = useState("other");
@@ -94,14 +93,84 @@ function UploadModal({ projectId, projects: propProjects, onClose, onSuccess }: 
   const [err, setErr]           = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [fetchedProjects, setFetchedProjects] = useState<ProjectOption[]>([]);
-  const projects = propProjects ?? fetchedProjects;
-  const [selectedProject, setSelected] = useState<number | undefined>(projectId);
+  /* ───────────────────────────────────────────────────────────────────────────
+     Cascade state
+     Step 1: Company   → GET /api/v1/projects/companies/dropdown/
+     Step 2: Admin *   → GET /api/v1/projects/companies/<id>/customer-admins/
+                          (response includes project_ids[] per admin)
+     Step 3: Project * → derived from admin.project_ids ∩ allCompanyProjects (no extra call)
+  ─────────────────────────────────────────────────────────────────────────── */
+  const [companies,          setCompanies]          = useState<CustomerOption[]>([]);
+  const [customerAdmins,     setCustomerAdmins]     = useState<CustomerAdminOption[]>([]);
+  const [allCompanyProjects, setAllCompanyProjects] = useState<ProjectOption[]>([]);
+  const [adminProjects,      setAdminProjects]      = useState<ProjectOption[]>([]);
+  const [selCompany,         setSelCompany]         = useState<number | undefined>(undefined);
+  const [selAdmin,           setSelAdmin]           = useState<number | undefined>(undefined);
+  const [selProject,         setSelProject]         = useState<number | undefined>(projectId);
 
+  // Loading flags per step
+  const [companiesLoading, setCompaniesLoading] = useState(!projectId);
+  const [adminsLoading,    setAdminsLoading]    = useState(false);
+  const [projectsLoading,  setProjectsLoading]  = useState(false);
+
+  /* Step 1 — load companies on mount */
   useEffect(() => {
-    if (projectId || propProjects) return;
-    documentsService.listProjects().then(setFetchedProjects).catch(() => {});
-  }, [projectId, propProjects]);
+    if (projectId) return;
+    setCompaniesLoading(true);
+    documentsService.listCompanies()
+      .then(cs => setCompanies(cs))
+      .catch(() => setCompanies([]))
+      .finally(() => setCompaniesLoading(false));
+  }, [projectId]);
+
+  /* Step 2 — company selected: fetch its admins + all projects for this company in parallel */
+  const handleCompanyChange = async (id: number | undefined) => {
+    setSelCompany(id);
+    setSelAdmin(undefined);
+    setSelProject(undefined);
+    setCustomerAdmins([]);
+    setAdminProjects([]);
+    setAllCompanyProjects([]);
+    if (!id) return;
+
+    setAdminsLoading(true);
+    try {
+      const [cas, allPs] = await Promise.all([
+        documentsService.listCustomerAdminsByCompany(id),
+        documentsService.listProjects(),
+      ]);
+      // Keep only projects belonging to this company
+      const companyPs = allPs.filter(
+        p => p.customer_id != null && String(p.customer_id) === String(id)
+      );
+      setCustomerAdmins(cas);
+      setAllCompanyProjects(companyPs);
+    } catch {
+      setCustomerAdmins([]);
+      setAllCompanyProjects([]);
+    } finally {
+      setAdminsLoading(false);
+    }
+  };
+
+  /* Step 3 — admin selected: intersect admin.project_ids with allCompanyProjects (no API call) */
+  const handleAdminChange = (id: number | undefined) => {
+    setSelAdmin(id);
+    setSelProject(undefined);
+    setAdminProjects([]);
+    if (!id) return;
+
+    setProjectsLoading(true);
+    const admin = customerAdmins.find(ca => ca.id === id);
+    const ids   = admin?.project_ids ?? [];
+    // Only show projects explicitly assigned to this admin
+    const ps = ids.length > 0
+      ? allCompanyProjects.filter(p => ids.includes(p.id))
+      : [];
+    setAdminProjects(ps);
+    if (ps.length > 0) setSelProject(ps[0].id);
+    setProjectsLoading(false);
+  };
 
   const handleFile = (f: File) => {
     if (f.size > MAX_BYTES) { setErr(`File exceeds ${MAX_MB} MB limit.`); return; }
@@ -111,12 +180,12 @@ function UploadModal({ projectId, projects: propProjects, onClose, onSuccess }: 
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file) { setErr("Please select a file."); return; }
-    if (!selectedProject) { setErr("Please select a project."); return; }
+    if (!file)        { setErr("Please select a file."); return; }
+    if (!selProject)  { setErr("Please select a project."); return; }
     setSaving(true); setErr(null);
     try {
       const doc = await documentsService.upload({
-        project: selectedProject, title, description: desc,
+        project: selProject, title, description: desc,
         category, file, version, is_public: isPublic,
       });
       onSuccess(doc);
@@ -180,15 +249,102 @@ function UploadModal({ projectId, projects: propProjects, onClose, onSuccess }: 
             )}
           </div>
 
+          {/* ── Cascade selectors (only when no projectId is locked in) ── */}
           {!projectId && (
-            <div>
-              <label className="mb-1.5 block text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">Project *</label>
-              <div className="relative">
-                <select required className={cn(inputCls, "appearance-none pr-10")} value={selectedProject ?? ""} onChange={e => setSelected(e.target.value ? Number(e.target.value) : undefined)}>
-                  <option value="" disabled>Select a project…</option>
-                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
+            <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/50">Select destination</p>
+
+              {/* Step 1 — Company * */}
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">
+                  <Building2 className="h-3.5 w-3.5" /> Company *
+                </label>
+                {companiesLoading ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-[13px] text-muted-foreground/60">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" /> Loading companies…
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <select
+                      required
+                      className={cn(inputCls, "appearance-none pr-10")}
+                      value={selCompany ?? ""}
+                      onChange={e => handleCompanyChange(e.target.value ? Number(e.target.value) : undefined)}
+                    >
+                      <option value="" disabled>Select a company…</option>
+                      {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
+                  </div>
+                )}
+              </div>
+
+              {/* Step 2 — Customer Admin * (required, unlocked after company) */}
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">
+                  <Users className="h-3.5 w-3.5" /> Customer Admin *
+                </label>
+                {!selCompany ? (
+                  <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-2.5 text-[13px] text-muted-foreground/40">
+                    <Users className="h-4 w-4 shrink-0" /> Select a company first
+                  </div>
+                ) : adminsLoading ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-[13px] text-muted-foreground/60">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" /> Loading admins…
+                  </div>
+                ) : customerAdmins.length === 0 ? (
+                  <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-amber-200 dark:border-amber-500/25 bg-amber-50 dark:bg-amber-500/5 px-4 py-2.5 text-[13px] text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-4 w-4 shrink-0" /> No customer admins for this company
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <select
+                      required
+                      className={cn(inputCls, "appearance-none pr-10")}
+                      value={selAdmin ?? ""}
+                      onChange={e => handleAdminChange(e.target.value ? Number(e.target.value) : undefined)}
+                    >
+                      <option value="" disabled>Select a customer admin…</option>
+                      {customerAdmins.map(ca => (
+                        <option key={ca.id} value={ca.id}>{ca.name}{ca.email ? ` — ${ca.email}` : ""}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
+                  </div>
+                )}
+              </div>
+
+              {/* Step 3 — Project * (required, unlocked after admin) */}
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">
+                  <FolderOpen className="h-3.5 w-3.5" /> Project *
+                </label>
+                {!selAdmin ? (
+                  <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-2.5 text-[13px] text-muted-foreground/40">
+                    <FolderOpen className="h-4 w-4 shrink-0" /> Select a customer admin first
+                  </div>
+                ) : projectsLoading ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-[13px] text-muted-foreground/60">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" /> Loading projects…
+                  </div>
+                ) : adminProjects.length === 0 ? (
+                  <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-amber-200 dark:border-amber-500/25 bg-amber-50 dark:bg-amber-500/5 px-4 py-2.5 text-[13px] text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-4 w-4 shrink-0" /> No projects assigned to this admin
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <select
+                      required
+                      className={cn(inputCls, "appearance-none pr-10")}
+                      value={selProject ?? ""}
+                      onChange={e => setSelProject(e.target.value ? Number(e.target.value) : undefined)}
+                    >
+                      <option value="" disabled>Select a project…</option>
+                      {adminProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -464,8 +620,8 @@ function DeleteModal({ doc, onClose, onSuccess }: { doc: Document; onClose: () =
    Filter Dropdown
 ───────────────────────────────────────────────────────────────────────────── */
 function FilterDropdown<T extends { id: number | string; name: string }>({
-  options, selectedId, allLabel, onChange, icon,
-}: { options: T[]; selectedId: T["id"] | undefined; allLabel: string; onChange: (id: T["id"] | undefined) => void; icon?: React.ReactNode }) {
+  options, selectedId, allLabel, onChange, icon, showAll = true,
+}: { options: T[]; selectedId: T["id"] | undefined; allLabel: string; onChange: (id: T["id"] | undefined) => void; icon?: React.ReactNode; showAll?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const sel = options.find(o => o.id === selectedId);
@@ -493,15 +649,19 @@ function FilterDropdown<T extends { id: number | string; name: string }>({
       {open && (
         <div className="absolute left-0 top-full z-50 mt-2 min-w-[200px] overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-black/10">
           <div className="p-1.5 max-h-60 overflow-y-auto">
-            <button onClick={() => { onChange(undefined); setOpen(false); }}
-              className={cn("flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors",
-                !selectedId ? "bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" : "hover:bg-muted"
-              )}>
-              <span className={cn("h-1.5 w-1.5 rounded-full", !selectedId ? "bg-orange-500" : "bg-border")} />
-              <span className="flex-1 text-left">{allLabel}</span>
-              {!selectedId && <Check className="h-3.5 w-3.5 shrink-0" />}
-            </button>
-            <div className="my-1 mx-2 h-px bg-border" />
+            {showAll && (
+              <>
+                <button onClick={() => { onChange(undefined); setOpen(false); }}
+                  className={cn("flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors",
+                    !selectedId ? "bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" : "hover:bg-muted"
+                  )}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full", !selectedId ? "bg-orange-500" : "bg-border")} />
+                  <span className="flex-1 text-left">{allLabel}</span>
+                  {!selectedId && <Check className="h-3.5 w-3.5 shrink-0" />}
+                </button>
+                <div className="my-1 mx-2 h-px bg-border" />
+              </>
+            )}
             {options.map(opt => (
               <button key={opt.id} onClick={() => { onChange(opt.id as any); setOpen(false); }}
                 className={cn("flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors",
@@ -588,45 +748,119 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
   const [query, setQuery]             = useState("");
   const [view, setView]               = useState<"list" | "grid">("list");
 
-  const [allProjects, setAllProjects]                   = useState<ProjectOption[]>([]);
-  const [customers, setCustomers]                       = useState<CustomerOption[]>([]);
-  const [activeCustomerId, setActiveCustomerId]         = useState<number | undefined>(undefined);
-  const [activeProjectId, setActiveProjectId]           = useState<number | undefined>(undefined);
-  const [customerAdmins, setCustomerAdmins]             = useState<CustomerAdminOption[]>([]);
+  /* ── Reference data (same pattern as Milestones) ── */
+  const [allProjects, setAllProjects]           = useState<ProjectOption[]>([]);
+  const [customers, setCustomers]               = useState<CustomerOption[]>([]);
+  const [customerAdmins, setCustomerAdmins]     = useState<CustomerAdminOption[]>([]);
+  const [activeCustomerId, setActiveCustomerId] = useState<number | string | undefined>(undefined);
   const [activeCustomerAdminId, setActiveCustomerAdminId] = useState<number | undefined>(undefined);
+  const [activeProjectId, setActiveProjectId]   = useState<number | undefined>(undefined);
+  const [refLoading, setRefLoading]             = useState(!projectId);
 
+  /* ── Filtered customer admins: only admins belonging to the selected company ── */
+  const filteredCustomerAdmins: CustomerAdminOption[] = activeCustomerId
+    ? customerAdmins.filter(ca =>
+        ca.company === activeCustomerId ||
+        String(ca.company) === String(activeCustomerId)
+      )
+    : customerAdmins;
+
+  /* ── Filtered projects: company → admin ── */
   const filteredProjects: ProjectOption[] = (() => {
     let base = allProjects;
+    if (activeCustomerId) {
+      base = base.filter(p =>
+        p.customer_id === activeCustomerId ||
+        p.customer_name === activeCustomerId ||
+        p.customer_id === customers.find(c => c.id === activeCustomerId)?.id
+      );
+    }
     if (activeCustomerAdminId) {
       const admin = customerAdmins.find(ca => ca.id === activeCustomerAdminId);
-      if (admin) base = base.filter(p => admin.project_ids.includes(p.id));
+      if (admin) {
+        // Always filter when an admin is selected — empty project_ids means 0 projects, not "skip filter"
+        base = admin.project_ids?.length
+          ? base.filter(p => admin.project_ids.includes(p.id))
+          : [];
+      }
     }
-    if (!activeCustomerId) return base;
-    return base.filter(p =>
-      p.customer_id != null ? p.customer_id === activeCustomerId : p.customer_name === customers.find(c => c.id === activeCustomerId)?.name
-    );
+    return base;
   })();
 
+  /* ── Bootstrap: load reference data then auto-select defaults ── */
   useEffect(() => {
-    if (projectId) return;
-    documentsService.listProjects().then(ps => {
-      setAllProjects(ps);
-      const seen = new Map<number | string, CustomerOption>();
-      ps.forEach((p: any) => { const key = p.customer_id ?? p.customer_name; if (p.customer_name && !seen.has(key)) seen.set(key, { id: p.customer_id ?? p.customer_name, name: p.customer_name }); });
-      if (seen.size > 0) setCustomers(Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)));
-    }).catch(() => {});
-    documentsService.listCustomers().then(cs => { if (cs.length > 0) setCustomers(cs); }).catch(() => {});
-    if (canManage) documentsService.listCustomerAdmins().then(cas => { if (cas.length > 0) setCustomerAdmins(cas); }).catch(() => {});
-  }, [projectId]);
+    if (projectId) { setRefLoading(false); return; }
 
+    Promise.all([
+      documentsService.listProjects().catch(() => [] as ProjectOption[]),
+      documentsService.listCustomers().catch(() => [] as CustomerOption[]),
+      canManage
+        ? documentsService.listCustomerAdmins().catch(() => [] as CustomerAdminOption[])
+        : Promise.resolve([] as CustomerAdminOption[]),
+    ]).then(([ps, cs, cas]) => {
+      setAllProjects(ps);
+
+      // Prefer the dedicated customers API; fall back to deriving from projects
+      if (cs.length > 0) {
+        setCustomers(cs);
+      } else {
+        const seen = new Map<number | string, CustomerOption>();
+        ps.forEach((p: any) => {
+          const key = p.customer_id ?? p.customer_name;
+          if (p.customer_name && key != null && !seen.has(key))
+            seen.set(key, { id: key, name: p.customer_name });
+        });
+        const derived = Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+        if (derived.length > 0) setCustomers(derived);
+      }
+
+      if (cas.length > 0) setCustomerAdmins(cas);
+      setRefLoading(false);
+
+      // Auto-select first company → first project (mirrors Milestones bootstrap)
+      if (!canManage && ps.length > 0) {
+        setActiveProjectId(ps[0].id);
+        return;
+      }
+
+      const resolvedCustomers = cs.length > 0 ? cs : (() => {
+        const seen = new Map<number | string, CustomerOption>();
+        ps.forEach((p: any) => {
+          const key = p.customer_id ?? p.customer_name;
+          if (p.customer_name && key != null && !seen.has(key))
+            seen.set(key, { id: key, name: p.customer_name });
+        });
+        return Array.from(seen.values());
+      })();
+
+      if (resolvedCustomers.length > 0) {
+        const first = resolvedCustomers[0];
+        setActiveCustomerId(first.id);
+        const cps = ps.filter(p => p.customer_id === first.id || p.customer_name === first.id);
+        const firstProject = cps[0] ?? ps[0];
+        if (firstProject) setActiveProjectId(firstProject.id);
+      } else if (ps.length > 0) {
+        setActiveProjectId(ps[0].id);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── Modals ── */
   const [showUpload, setShowUpload] = useState(false);
   const [versionDoc, setVersionDoc] = useState<Document | null>(null);
   const [historyDoc, setHistoryDoc] = useState<Document | null>(null);
   const [deleteDoc, setDeleteDoc]   = useState<Document | null>(null);
 
+  /* ── Load documents ── */
   const load = () => {
-    setLoading(true);
     const proj = projectId ?? activeProjectId;
+
+    // If a customer admin is selected but no project has resolved yet, skip —
+    // handleAdminChange will set activeProjectId which triggers load() again.
+    if (activeCustomerAdminId && !proj) return;
+
+    setLoading(true);
     const params: Parameters<typeof documentsService.list>[0] = {};
     if (proj) params.project = proj;
     if (activeCustomerAdminId) params.customer_admin_id = activeCustomerAdminId;
@@ -641,10 +875,62 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
 
   useEffect(load, [projectId, activeProjectId, activeCustomerAdminId]);
 
+  /* ── Filter handlers with cascade resets (mirrors Milestones) ── */
+  const handleCompanyChange = (id: number | string | undefined) => {
+    setActiveCustomerId(id);
+    // Reset downstream selections
+    setActiveCustomerAdminId(undefined);
+    if (id) {
+      const cps = allProjects.filter(p => p.customer_id === id || p.customer_name === id);
+      setActiveProjectId(cps[0]?.id);
+    } else {
+      setActiveProjectId(undefined);
+    }
+  };
+
+  const handleAdminChange = async (id: number | undefined) => {
+    setActiveCustomerAdminId(id);
+    setActiveProjectId(undefined);
+    if (id) {
+      // Fetch the real project list for this admin from the backend
+      // (the project_ids on the CustomerAdminOption may be empty/stale)
+      try {
+        const ps = await documentsService.listProjectsByAdmin(id);
+        // Merge these into allProjects so the project dropdown can show them
+        setAllProjects(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const fresh = ps.filter(p => !existingIds.has(p.id));
+          return [...prev, ...fresh];
+        });
+        // Update the admin's project_ids in state so filteredProjects works correctly
+        setCustomerAdmins(prev =>
+          prev.map(ca =>
+            ca.id === id ? { ...ca, project_ids: ps.map(p => p.id) } : ca
+          )
+        );
+        setActiveProjectId(ps[0]?.id);
+      } catch {
+        setCustomerAdmins(prev =>
+          prev.map(ca => (ca.id === id ? { ...ca, project_ids: [] } : ca))
+        );
+        setActiveProjectId(undefined);
+      }
+    } else {
+      // Admin deselected — fall back to first project scoped to the selected company
+      if (activeCustomerId) {
+        const cps = allProjects.filter(
+          p => p.customer_id === activeCustomerId || p.customer_name === activeCustomerId
+        );
+        setActiveProjectId(cps[0]?.id);
+      }
+    }
+  };
+
+  /* ── Client-side filter ── */
   const filtered = useMemo(() => {
     const lq = (query ?? "").toLowerCase();
     return documents.filter(d => {
-      const catVal  = (categories.find(c => c.label === category)?.value ?? "").toLowerCase();
+      const catVal   = (categories.find(c => c.label === category)?.value ?? "").toLowerCase();
       const matchCat = category === "All" || (d.category ?? "").toLowerCase() === catVal || (d.category ?? "").toLowerCase() === category.toLowerCase();
       const matchQ   = lq === "" || (d.title ?? "").toLowerCase().includes(lq);
       return matchCat && matchQ;
@@ -702,18 +988,46 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
               <span className="text-[11px] font-bold uppercase tracking-[.2em]" style={{ color: BRAND }}>Document Library</span>
             </div>
             <h1 className="text-xl font-bold text-foreground">Documents</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Version-controlled files — commercials, drawings, manuals & reports</p>
+            {allProjects.find(p => p.id === activeProjectId) && (
+              <p className="text-sm text-muted-foreground mt-0.5">{allProjects.find(p => p.id === activeProjectId)?.name}</p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
-            {!projectId && customers.length > 0 && (
-              <FilterDropdown<CustomerOption> options={customers} selectedId={activeCustomerId} allLabel="All Customers" onChange={id => setActiveCustomerId(id as number | undefined)} icon={<Users className="h-3.5 w-3.5" />} />
+
+            {/* 1. Company filter */}
+            {!projectId && !refLoading && customers.length > 0 && (
+              <FilterDropdown<CustomerOption>
+                options={customers}
+                selectedId={activeCustomerId}
+                allLabel="All Companies"
+                onChange={id => handleCompanyChange(id as number | string | undefined)}
+                icon={<Building2 className="h-3.5 w-3.5" />}
+              />
             )}
-            {!projectId && canManage && customerAdmins.length > 0 && (
-              <FilterDropdown<CustomerAdminOption> options={customerAdmins} selectedId={activeCustomerAdminId} allLabel="All Admins" onChange={id => { setActiveCustomerAdminId(id as number | undefined); setActiveProjectId(undefined); }} icon={<Building2 className="h-3.5 w-3.5" />} />
+
+            {/* 2. Customer Admin filter (only when there are admins for the selected company) */}
+            {!projectId && canManage && !refLoading && filteredCustomerAdmins.length > 0 && (
+              <FilterDropdown<CustomerAdminOption>
+                options={filteredCustomerAdmins}
+                selectedId={activeCustomerAdminId}
+                allLabel="All Admins"
+                onChange={id => handleAdminChange(id as number | undefined)}
+                icon={<Users className="h-3.5 w-3.5" />}
+              />
             )}
-            {!projectId && filteredProjects.length > 0 && (
-              <FilterDropdown<ProjectOption> options={filteredProjects} selectedId={activeProjectId} allLabel="All Projects" onChange={id => setActiveProjectId(id as number | undefined)} icon={<FolderOpen className="h-3.5 w-3.5" />} />
+
+            {/* 3. Project filter */}
+            {!projectId && !refLoading && filteredProjects.length > 0 && (
+              <FilterDropdown<ProjectOption>
+                options={filteredProjects}
+                selectedId={activeProjectId}
+                allLabel="All Projects"
+                showAll={canManage}
+                onChange={id => setActiveProjectId(id as number | undefined)}
+                icon={<FolderOpen className="h-3.5 w-3.5" />}
+              />
             )}
+
             {canManage && (
               <button onClick={() => setShowUpload(true)}
                 className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-bold text-white shadow-sm transition-all hover:opacity-90"
@@ -907,7 +1221,13 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
       </div>
 
       {/* ── Modals ── */}
-      {showUpload && <UploadModal projectId={projectId} projects={projectId ? undefined : filteredProjects} onClose={() => setShowUpload(false)} onSuccess={doc => { setDocuments(p => [doc, ...p]); setShowUpload(false); }} />}
+      {showUpload && (
+        <UploadModal
+          projectId={projectId}
+          onClose={() => setShowUpload(false)}
+          onSuccess={doc => { setDocuments(p => [doc, ...p]); setShowUpload(false); }}
+        />
+      )}
       {versionDoc && <VersionModal doc={versionDoc} onClose={() => setVersionDoc(null)} onSuccess={updated => { setDocuments(p => p.map(d => d.id === updated.id ? updated : d)); setVersionDoc(null); }} />}
       {historyDoc && <VersionHistoryDrawer doc={historyDoc} onClose={() => setHistoryDoc(null)} />}
       {deleteDoc && <DeleteModal doc={deleteDoc} onClose={() => setDeleteDoc(null)} onSuccess={id => { setDocuments(p => p.filter(d => d.id !== id)); setDeleteDoc(null); }} />}

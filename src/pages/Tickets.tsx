@@ -3,12 +3,12 @@ import {
   Plus, ChevronRight, Search, AlertTriangle,
   Flag, Layers, Activity, CheckCircle2, Clock,
   SlidersHorizontal, TicketIcon, ChevronDown, Check,
-  BarChart3,
+  BarChart3, Building2, Users,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { ticketsService, type Ticket, type TicketSummary } from "@/services/tickets";
+import { ticketsService, projectsService, customersService, type Ticket, type TicketSummary, type CustomerOption, type CustomerAdminOption } from "@/services/tickets";
 import { cn } from "@/lib/utils";
 import NewTicketModal from "./NewTicketModal";
 
@@ -139,7 +139,8 @@ export default function Tickets() {
   const { toast } = useToast();
   const { user }  = useAuth();
 
-  const canRaise = isCustomer(user?.role);
+  const canRaise  = isCustomer(user?.role);
+  const canManage = user?.role === "admin" || user?.role === "project_manager";
 
   const [query,        setQuery]        = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -148,16 +149,75 @@ export default function Tickets() {
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
   const [modalOpen,    setModalOpen]    = useState(false);
+  const [projects,             setProjects]             = useState<{ id: number; name: string; customer_id?: number | null; customer_name?: string | null }[]>([]);
+  const [customers,            setCustomers]            = useState<CustomerOption[]>([]);
+  const [customerAdmins,       setCustomerAdmins]       = useState<CustomerAdminOption[]>([]);
+  const [activeCustomerId,     setActiveCustomerId]     = useState<number | string | undefined>(undefined);
+  const [activeAdminId,        setActiveAdminId]        = useState<number | undefined>(undefined);
+  const [activeProjectId,      setActiveProjectId]      = useState<number | undefined>(undefined);
 
-  const load = () => {
+  const load = (cid?: number | string, pid?: number) => {
     setLoading(true);
-    Promise.all([ticketsService.list(), ticketsService.summary()])
+    const params: Record<string, any> = {};
+    if (cid) params.customer_id = cid;
+    if (pid) params.project     = pid;
+    Promise.all([ticketsService.list(params), ticketsService.summary(params)])
       .then(([list, sum]) => { setTickets(list); setSummary(sum); })
       .catch(() => setError("Failed to load tickets. Please try again."))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    Promise.all([
+      projectsService.list().catch(() => [] as typeof projects),
+      customersService.listCustomers().catch(() => [] as CustomerOption[]),
+      canManage
+        ? customersService.listCustomerAdmins().catch(() => [] as CustomerAdminOption[])
+        : Promise.resolve([] as CustomerAdminOption[]),
+    ]).then(([ps, cs, cas]) => {
+      setProjects(ps as any);
+      setCustomers(cs);
+      setCustomerAdmins(cas);
+    });
+    load();
+  }, []);
+
+  // ── Cascading derived lists ──────────────────────────────────────────────
+  // activeCustomerId is now the company NAME string (tickets/customers/ returns name as id).
+  // This matches CustomerAdminOption.company and project.customer_name directly.
+  const activeCustomerName = activeCustomerId as string | undefined;
+
+  // Filter admins: ca.company is a name string — direct match
+  const filteredCustomerAdmins: CustomerAdminOption[] = activeCustomerName
+    ? customerAdmins.filter(ca => ca.company === activeCustomerName)
+    : customerAdmins;
+
+  const filteredProjects = (() => {
+    let result = projects;
+    if (activeCustomerName)
+      result = result.filter(p =>
+        p.customer_name === activeCustomerName ||
+        String(p.customer_id) === String(activeCustomerName)
+      );
+    if (activeAdminId) {
+      const admin = customerAdmins.find(ca => ca.id === activeAdminId);
+      if (admin?.project_ids?.length)
+        result = result.filter(p => admin.project_ids.includes(p.id));
+    }
+    return result;
+  })();
+
+  // Re-load tickets + refresh admin list whenever the customer changes
+  useEffect(() => {
+    if (!loading) {
+      load(activeCustomerId, activeProjectId);
+      // Re-fetch admins filtered by company name (activeCustomerId IS the name now)
+      customersService.listCustomerAdmins(activeCustomerId as string | undefined)
+        .then(setCustomerAdmins)
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCustomerId, activeAdminId, activeProjectId]);
 
   const filtered = useMemo(() =>
     tickets.filter(t => {
@@ -215,6 +275,46 @@ export default function Tickets() {
             <p className="text-sm text-muted-foreground mt-0.5">Direct line to your DMW engineering team.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Company filter — staff only */}
+            {canManage && customers.length > 0 && (
+              <FilterDropdown
+                options={[{ value: "", label: "All Customers" }, ...customers.map(c => ({ value: String(c.id), label: c.name }))]}
+                value={activeCustomerId ?? ""}
+                onChange={v => {
+                  // id is now the company name string (same as milestones endpoint)
+                  setActiveCustomerId(v || undefined);
+                  setActiveAdminId(undefined);
+                  setActiveProjectId(undefined);
+                }}
+                icon={<Building2 className="h-3.5 w-3.5" />}
+              />
+            )}
+            {/* Admin filter — staff only, filtered by selected company */}
+            {canManage && customerAdmins.length > 0 && (
+              <FilterDropdown
+                options={[{ value: "", label: "All Admins" }, ...filteredCustomerAdmins.map(a => ({ value: String(a.id), label: a.name }))]}
+                value={activeAdminId !== undefined ? String(activeAdminId) : ""}
+                onChange={v => {
+                  const id = v ? Number(v) : undefined;
+                  setActiveAdminId(id);
+                  setActiveProjectId(undefined);
+                  if (id) {
+                    const admin = customerAdmins.find(ca => ca.id === id);
+                    if (admin?.project_ids?.length) setActiveProjectId(admin.project_ids[0]);
+                  }
+                }}
+                icon={<Users className="h-3.5 w-3.5" />}
+              />
+            )}
+            {/* Project filter */}
+            {(canManage || filteredProjects.length > 0) && projects.length > 0 && (
+              <FilterDropdown
+                options={[{ value: "", label: "All Projects" }, ...filteredProjects.map(p => ({ value: String(p.id), label: p.name }))]}
+                value={activeProjectId !== undefined ? String(activeProjectId) : ""}
+                onChange={v => setActiveProjectId(v ? Number(v) : undefined)}
+                icon={<SlidersHorizontal className="h-3.5 w-3.5" />}
+              />
+            )}
             {/* Search */}
             <div className="relative">
               <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
@@ -372,7 +472,7 @@ export default function Tickets() {
 
       {/* Modal */}
       {canRaise && (
-        <NewTicketModal open={modalOpen} onClose={() => setModalOpen(false)} onCreated={() => { setModalOpen(false); load(); }} />
+        <NewTicketModal open={modalOpen} onClose={() => setModalOpen(false)} onCreated={() => { setModalOpen(false); load(); }} projects={projects} />
       )}
     </div>
   );

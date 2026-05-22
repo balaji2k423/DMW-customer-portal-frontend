@@ -1,5 +1,25 @@
 import api from "@/lib/api";
 
+export interface Project {
+  id: number;
+  name: string;
+  customer_id?: number | null;
+  customer_name?: string | null;
+}
+
+export interface CustomerOption {
+  id: number | string;
+  name: string;
+}
+
+export interface CustomerAdminOption {
+  id: number;
+  name: string;
+  email: string;
+  company: string;
+  project_ids: number[];
+}
+
 export interface TicketAttachment {
   id: number;
   filename: string;
@@ -65,8 +85,8 @@ export interface TicketSummary {
 }
 
 export const ticketsService = {
-  summary: async (): Promise<TicketSummary> => {
-    const { data } = await api.get("/tickets/summary/");
+  summary: async (params?: { customer_id?: number | string; project?: number }): Promise<TicketSummary> => {
+    const { data } = await api.get("/tickets/summary/", { params });
     return data;
   },
 
@@ -74,6 +94,8 @@ export const ticketsService = {
     status?: string;
     priority?: string;
     search?: string;
+    customer_id?: number | string;
+    project?: number;
   }): Promise<Ticket[]> => {
     const { data } = await api.get("/tickets/", { params });
     return data.results ?? data;
@@ -124,6 +146,31 @@ export const ticketsService = {
     const { data } = await api.post(`/tickets/${ticketId}/attachments/`, form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
+    return data;
+  },
+};
+export const projectsService = {
+  list: async (): Promise<Project[]> => {
+    const { data } = await api.get("/projects/", { params: { page_size: 500 } });
+    const rows: any[] = data.results ?? data;
+    return rows.map((p: any) => ({
+      id:            p.id,
+      name:          p.name,
+      customer_id:   p.customer_id   ?? p.company_id   ?? p.customer   ?? null,
+      customer_name: p.customer_name ?? p.company_name ?? p.company     ?? null,
+    }));
+  },
+};
+
+export const customersService = {
+  listCustomers: async (): Promise<CustomerOption[]> => {
+    const { data } = await api.get("/tickets/customers/");
+    return data;
+  },
+
+  listCustomerAdmins: async (company?: string): Promise<CustomerAdminOption[]> => {
+    const params = company ? { company } : undefined;
+    const { data } = await api.get("/milestones/customer-admins/", { params });
     return data;
   },
 };

@@ -93,6 +93,53 @@ export const documentsService = {
   },
 
   /**
+   * Step 1 — Company dropdown.
+   * GET /api/v1/projects/companies/dropdown/
+   * Registered in projects/urls.py — NOT company_master/urls.py.
+   * Backend returns { id, company_name, city, state } — mapped to CustomerOption { id, name }.
+   */
+  listCompanies: async (): Promise<CustomerOption[]> => {
+    const { data } = await api.get("/projects/companies/dropdown/");
+    return (data as any[]).map((c) => ({
+      id:   c.id,
+      name: c.company_name ?? c.name ?? "",   // backend sends 'company_name'
+    }));
+  },
+
+  /**
+   * Step 2 — Customer admins for a specific company.
+   * GET /api/v1/projects/companies/<id>/customer-admins/
+   * Registered in projects/urls.py — NOT company_master/urls.py.
+   * Backend returns { id, email, full_name } — mapped to CustomerAdminOption.
+   */
+  listCustomerAdminsByCompany: async (companyId: number): Promise<CustomerAdminOption[]> => {
+    const { data } = await api.get(`/projects/companies/${companyId}/customer-admins/`);
+    return (data as any[]).map((u) => ({
+      id:          u.id,
+      name:        u.full_name ?? u.name ?? u.email ?? "",  // backend sends 'full_name'
+      email:       u.email ?? "",
+      company:     u.company ?? "",
+      project_ids: u.project_ids ?? [],
+    }));
+  },
+
+  /**
+   * Step 3 — Projects assigned to a specific customer admin.
+   * GET /api/v1/projects/?customer_admin_id=<id>
+   * ProjectListCreateView is mounted at /projects/ in urls.py.
+   */
+  listProjectsByAdmin: async (adminId: number): Promise<ProjectOption[]> => {
+    const { data } = await api.get("/projects/", { params: { customer_admin_id: adminId, page_size: 500 } });
+    const rows: any[] = data.results ?? data;
+    return rows.map((p: any) => ({
+      id:            p.id,
+      name:          p.name,
+      customer_id:   p.customer_id   ?? p.customer   ?? null,
+      customer_name: p.customer_name ?? p.customer_display_name ?? null,
+    }));
+  },
+
+  /**
    * List projects accessible to the current user, preserving customer_id / customer_name.
    */
   listProjects: async (): Promise<ProjectOption[]> => {

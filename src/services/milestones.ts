@@ -113,8 +113,9 @@ export const milestonesService = {
     return rows.map((p: any) => ({
       id:            p.id,
       name:          p.name,
-      customer_id:   null,
-      customer_name: null,
+      // Map whichever field the projects API returns for company/customer
+      customer_id:   p.customer_id   ?? p.company_id   ?? p.customer   ?? null,
+      customer_name: p.customer_name ?? p.company_name ?? p.company     ?? null,
     }));
   },
 
