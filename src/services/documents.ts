@@ -1,5 +1,42 @@
 import api from "@/lib/api";
 
+/* ─── File-size / type constants (used by both service + UI) ─── */
+export const MAX_MB    = 5;
+export const MAX_BYTES = MAX_MB * 1024 * 1024;
+
+export const ALLOWED_EXTENSIONS: readonly string[] = [
+  "pdf",
+  "doc", "docx",
+  "xls", "xlsx",
+  "stl", "step", "stp",
+  "f3d",
+  "prt",
+  "dxf", "dwg",
+  "png", "jpg", "jpeg", "gif", "webp", "svg",
+  "zip", "rar", "7z", "tar", "gz",
+  "txt", "csv", "xml", "json",
+] as const;
+
+export const ALLOWED_EXTENSIONS_DISPLAY =
+  "PDF, DOC/DOCX, XLS/XLSX, STL, STEP/STP, F3D, PRT, DXF/DWG, PNG, JPG, ZIP";
+
+/**
+ * Validates a File against the allowed extension list and 5 MB size cap.
+ * Returns an error string on failure, or null on success.
+ */
+export function validateFile(file: File): string | null {
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (!ALLOWED_EXTENSIONS.includes(ext as any)) {
+    return `File type ".${ext}" is not allowed. Accepted: ${ALLOWED_EXTENSIONS_DISPLAY}.`;
+  }
+  if (file.size > MAX_BYTES) {
+    return `File exceeds the ${MAX_MB} MB limit (${(file.size / 1024 / 1024).toFixed(2)} MB).`;
+  }
+  return null;
+}
+
+/* ─── Domain types ─── */
+
 export interface CustomerOption {
   id: number;
   name: string;
@@ -9,7 +46,7 @@ export interface CustomerAdminOption {
   id: number;
   name: string;
   email: string;
-  company: string;
+  company: number | string;
   project_ids: number[];
 }
 
@@ -74,6 +111,8 @@ export interface VersionUploadPayload {
   change_note?: string;
 }
 
+/* ─── Service ─── */
+
 export const documentsService = {
   /**
    * List customers accessible to the current user.
@@ -95,38 +134,32 @@ export const documentsService = {
   /**
    * Step 1 — Company dropdown.
    * GET /api/v1/projects/companies/dropdown/
-   * Registered in projects/urls.py — NOT company_master/urls.py.
-   * Backend returns { id, company_name, city, state } — mapped to CustomerOption { id, name }.
    */
   listCompanies: async (): Promise<CustomerOption[]> => {
     const { data } = await api.get("/projects/companies/dropdown/");
     return (data as any[]).map((c) => ({
       id:   c.id,
-      name: c.company_name ?? c.name ?? "",   // backend sends 'company_name'
+      name: c.company_name ?? c.name ?? "",
     }));
   },
 
   /**
    * Step 2 — Customer admins for a specific company.
    * GET /api/v1/projects/companies/<id>/customer-admins/
-   * Registered in projects/urls.py — NOT company_master/urls.py.
-   * Backend returns { id, email, full_name } — mapped to CustomerAdminOption.
    */
   listCustomerAdminsByCompany: async (companyId: number): Promise<CustomerAdminOption[]> => {
     const { data } = await api.get(`/projects/companies/${companyId}/customer-admins/`);
     return (data as any[]).map((u) => ({
       id:          u.id,
-      name:        u.full_name ?? u.name ?? u.email ?? "",  // backend sends 'full_name'
+      name:        u.full_name ?? u.name ?? u.email ?? "",
       email:       u.email ?? "",
-      company:     u.company ?? "",
+      company:     u.company_id ?? u.company ?? companyId,
       project_ids: u.project_ids ?? [],
     }));
   },
 
   /**
    * Step 3 — Projects assigned to a specific customer admin.
-   * GET /api/v1/projects/?customer_admin_id=<id>
-   * ProjectListCreateView is mounted at /projects/ in urls.py.
    */
   listProjectsByAdmin: async (adminId: number): Promise<ProjectOption[]> => {
     const { data } = await api.get("/projects/", { params: { customer_admin_id: adminId, page_size: 500 } });
@@ -140,7 +173,7 @@ export const documentsService = {
   },
 
   /**
-   * List projects accessible to the current user, preserving customer_id / customer_name.
+   * List projects accessible to the current user.
    */
   listProjects: async (): Promise<ProjectOption[]> => {
     const { data } = await api.get("/projects/", { params: { page_size: 500 } });
@@ -178,8 +211,8 @@ export const documentsService = {
   },
 
   /**
-   * Upload a new document.
-   * Max 5 MB — enforced on both frontend and backend.
+   * Upload a new document (max 5 MB — enforced by validateFile on the frontend).
+   * Roles: admin, project_manager, customer_admin, guest (backend enforces guest restrictions).
    */
   upload: async (payload: UploadPayload): Promise<Document> => {
     const form = new FormData();
@@ -200,8 +233,7 @@ export const documentsService = {
 
   /**
    * Bump a document to a new version.
-   * Archives the current file (existing becomes v1, new file becomes v2+).
-   * Max 5 MB.
+   * Archives the current file; new file becomes active.
    */
   uploadVersion: async (id: number, payload: VersionUploadPayload): Promise<Document> => {
     const form = new FormData();
@@ -239,5 +271,21 @@ export const documentsService = {
     link.click();
     link.remove();
     window.URL.revokeObjectURL(url);
+  },
+
+  /**
+   * Fetch a file's raw bytes via the authenticated axios instance.
+   * Returns both the ArrayBuffer and the content-type header so callers
+   * can create correctly-typed Blob URLs for iframe / img preview.
+   * Using axios ensures the Bearer token interceptor fires automatically,
+   * avoiding HTML login-page redirects that raw fetch() / iframe src would receive.
+   */
+  fetchFileBuffer: async (id: number): Promise<{ buffer: ArrayBuffer; contentType: string }> => {
+    const response = await api.get(`/documents/${id}/download/`, {
+      responseType: "arraybuffer",
+    });
+    const contentType =
+      (response.headers["content-type"] as string | undefined) ?? "application/octet-stream";
+    return { buffer: response.data as ArrayBuffer, contentType };
   },
 };
