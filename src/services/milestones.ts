@@ -23,10 +23,21 @@ export interface Subtask {
   id: number;
   milestone_id: number;
   title: string;
-  status: "todo" | "in_progress" | "done";
+  status: "todo" | "in_progress" | "done" | "approved";
   assignee_name?: string;
   due_date?: string;
   order: number;
+}
+
+export interface HistoryEntry {
+  id: number;
+  action: string;
+  detail: string;
+  old_value: string;
+  new_value: string;
+  delay_reason: string;
+  actor_name: string;
+  created_at: string;
 }
 
 export interface Milestone {
@@ -37,6 +48,12 @@ export interface Milestone {
   status: "pending" | "in_progress" | "completed" | "delayed" | "cancelled";
   planned_date: string;
   actual_date: string | null;
+  /** Set when a milestone is rescheduled — stores the new date before it replaces planned_date */
+  rescheduled_date: string | null;
+  /** Mandatory reason text whenever planned_date is changed */
+  delay_reason: string;
+  /** Overall project status tracked on this milestone */
+  project_status: "not_started" | "in_progress" | "on_hold" | "completed" | "cancelled" | "";
   order: number;
   owner_name: string;
   deliverable_count: number;
@@ -45,6 +62,7 @@ export interface Milestone {
   deliverables: Deliverable[];
   sign_off: SignOff | null;
   subtasks: Subtask[];
+  history?: HistoryEntry[];
   created_at: string;
 }
 
@@ -62,9 +80,7 @@ export interface TimelineResponse {
 export interface ProjectOption {
   id: number;
   name: string;
-  /** Numeric company/customer id */
   customer_id?: number | null;
-  /** Human-readable company/customer name */
   customer_name?: string | null;
 }
 
@@ -93,33 +109,33 @@ export interface UpdateSubtaskPayload {
   order?: number;
 }
 
+export interface ReschedulePayload {
+  new_planned_date: string;
+  delay_reason: string;
+}
+
 export const milestonesService = {
-  // List customers accessible to the current user
-  listCustomers: async (): Promise<{ id: number; name: string }[]> => {
+  listCustomers: async (): Promise<{ id: number | string; name: string }[]> => {
     const { data } = await api.get("/milestones/customers/");
     return data;
   },
 
-  // List users with role=customer_admin (admin / project_manager only)
   listCustomerAdmins: async (): Promise<CustomerAdminOption[]> => {
     const { data } = await api.get("/milestones/customer-admins/");
     return data;
   },
 
-  // List projects the current user can access
   listProjects: async (): Promise<ProjectOption[]> => {
     const { data } = await api.get("/projects/", { params: { page_size: 500 } });
     const rows: any[] = data.results ?? data;
     return rows.map((p: any) => ({
       id:            p.id,
       name:          p.name,
-      // Map whichever field the projects API returns for company/customer
       customer_id:   p.customer_id   ?? p.company_id   ?? p.customer   ?? null,
       customer_name: p.customer_name ?? p.company_name ?? p.company     ?? null,
     }));
   },
 
-  // Get all milestones, optionally filtered by project, customer, and/or customer admin
   list: async (
     projectId?: number,
     customerId?: number | string,
@@ -133,19 +149,16 @@ export const milestonesService = {
     return data.results ?? data;
   },
 
-  // Get timeline for a specific project (used by the stepper)
   timeline: async (projectId: number): Promise<TimelineResponse> => {
     const { data } = await api.get(`/milestones/project/${projectId}/timeline/`);
     return data;
   },
 
-  // Get single milestone detail
   get: async (id: number): Promise<Milestone> => {
     const { data } = await api.get(`/milestones/${id}/`);
     return data;
   },
 
-  // Create a new milestone (admin / project_manager only)
   create: async (payload: {
     project:      number;
     title:        string;
@@ -158,28 +171,39 @@ export const milestonesService = {
     return data;
   },
 
-  // Update a milestone (admin / project_manager only)
   update: async (
     id: number,
     payload: Partial<{
-      title:        string;
-      description:  string;
-      status:       string;
-      planned_date: string;
-      actual_date:  string;
-      order:        number;
+      title:          string;
+      description:    string;
+      status:         string;
+      project_status: string;
+      planned_date:   string;
+      actual_date:    string;
+      delay_reason:   string;
+      order:          number;
     }>
   ): Promise<Milestone> => {
     const { data } = await api.patch(`/milestones/${id}/`, payload);
     return data;
   },
 
-  // Delete a milestone (admin only)
+  /** Reschedule with mandatory delay reason — recorded in audit log */
+  reschedule: async (id: number, payload: ReschedulePayload): Promise<Milestone> => {
+    const { data } = await api.post(`/milestones/${id}/reschedule/`, payload);
+    return data;
+  },
+
+  /** Full audit log for a milestone */
+  getHistory: async (id: number): Promise<HistoryEntry[]> => {
+    const { data } = await api.get(`/milestones/${id}/history/`);
+    return data;
+  },
+
   delete: async (id: number): Promise<void> => {
     await api.delete(`/milestones/${id}/`);
   },
 
-  // Sign off a milestone (customer_admin only)
   signOff: async (id: number, remarks?: string): Promise<SignOff> => {
     const { data } = await api.post(`/milestones/${id}/signoff/`, { remarks });
     return data;
@@ -200,10 +224,7 @@ export const milestonesService = {
     return data;
   },
 
-  updateSubtask: async (
-    id: number,
-    payload: UpdateSubtaskPayload
-  ): Promise<Subtask> => {
+  updateSubtask: async (id: number, payload: UpdateSubtaskPayload): Promise<Subtask> => {
     const { data } = await api.patch(`/subtasks/${id}/`, payload);
     return data;
   },
@@ -212,12 +233,7 @@ export const milestonesService = {
     await api.delete(`/subtasks/${id}/`);
   },
 
-  reorderSubtasks: async (
-    milestoneId: number,
-    orderedIds: number[]
-  ): Promise<void> => {
-    await api.post(`/milestones/${milestoneId}/subtasks/reorder/`, {
-      order: orderedIds,
-    });
+  reorderSubtasks: async (milestoneId: number, orderedIds: number[]): Promise<void> => {
+    await api.post(`/milestones/${milestoneId}/subtasks/reorder/`, { order: orderedIds });
   },
 };

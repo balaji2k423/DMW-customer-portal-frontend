@@ -212,27 +212,7 @@ export function AppSidebar() {
           )}
         </nav>
 
-        {/* ─── User footer ─── */}
-        <div className={cn(
-          "flex items-center border-t border-border transition-[padding] duration-300",
-          isHovered ? "gap-2.5 px-3 py-3" : "justify-center px-0 py-3"
-        )}>
-          <div
-            className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 text-[11px] font-bold text-white"
-            style={{ background: BRAND }}
-          >
-            {initials}
-          </div>
-          {isHovered && (
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-foreground truncate">{fullName || user?.email}</p>
-              <p className="text-[10px] text-muted-foreground capitalize">{roleLabel}</p>
-            </div>
-          )}
-          {isHovered && (
-            <div className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
-          )}
-        </div>
+       
 
         {/* Expand chevron hint */}
         <div className={cn(

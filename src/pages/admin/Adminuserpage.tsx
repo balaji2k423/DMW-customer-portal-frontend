@@ -477,7 +477,7 @@ interface UserForm {
 }
 interface FormErrors {
   email?: string; first_name?: string; last_name?: string;
-  role?: string; company?: string; password?: string;
+  role?: string; company?: string; password?: string; phone?: string;
 }
 
 const CUSTOMER_ROLES  = new Set(["customer_admin", "customer_user"]);
@@ -495,7 +495,9 @@ function validate(form: UserForm): FormErrors {
   if (!form.last_name.trim())                               e.last_name  = "Last name is required";
   if (!form.role)                                           e.role       = "Role is required";
   if (CUSTOMER_ROLES.has(form.role) && !form.company)       e.company    = "Company is required";
-  if (form.password && form.password.length < 8)            e.password   = "Password must be at least 8 characters";
+  if (!form.password.trim())                                e.password   = "Password is required";
+  else if (form.password.length < 8)                        e.password   = "Password must be at least 8 characters";
+  if (form.phone && form.phone.length !== 10)               e.phone      = "Phone number must be exactly 10 digits";
   return e;
 }
 
@@ -649,15 +651,26 @@ function UserModal({
             </div>
           )}
 
-          <Field label="Phone">
-            <div className="relative">
-              <Phone className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
-              <input className={cn(inputCls, "pl-10")}
-                placeholder="+49 123 456789" value={form.phone} onChange={set("phone")} />
-            </div>
-          </Field>
+          <Field label="Phone" error={errors.phone}>
+  <div className="relative">
+    <Phone className="..." />
+    <input
+      type="tel"
+      className={cn(inputCls, "pl-10", errors.phone && "border-red-400")}
+      placeholder="9876543210"
+      value={form.phone}
+      maxLength={10}
+      inputMode="numeric"
+      onChange={(e) => {
+        const value = e.target.value.replace(/\D/g, "").slice(0, 10);
+        setForm((f) => ({ ...f, phone: value }));
+        if (errors.phone) setErrors((p) => ({ ...p, phone: undefined }));
+      }}
+    />
+  </div>
+</Field>
 
-          <Field label={isEdit ? "New Password (leave blank to keep current)" : "Password"} error={errors.password}>
+          <Field label={isEdit ? "New Password" : "Password"} required error={errors.password}>
             <input type="password"
               className={cn(inputCls, errors.password && "border-red-400")}
               placeholder={isEdit ? "••••••••" : "Min. 8 characters"}

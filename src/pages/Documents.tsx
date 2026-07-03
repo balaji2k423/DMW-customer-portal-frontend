@@ -1,11 +1,12 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Search, Download, Eye, LayoutGrid, List,
   FileText, FileSpreadsheet, FileCode, Files, Loader2,
   AlertTriangle, Upload, RefreshCw, Trash2,
   ChevronDown, X, Check, History, FolderOpen,
   Users, Building2, Box,
-  RotateCcw,
+  RotateCcw, CheckCircle2, XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -50,11 +51,11 @@ function fileMeta(type: string) {
   return FILE_META[type] ?? { color: "text-zinc-500", bg: "bg-zinc-100 dark:bg-zinc-800", label: type?.toUpperCase() || "FILE" };
 }
 
-function FileIcon({ type, className }: { type: string; className?: string }) {
-  if (type === "xlsx" || type === "xls")      return <FileSpreadsheet className={className} />;
-  if (type === "dwg"  || type === "dxf")      return <FileCode className={className} />;
-  if (CAD_3D_TYPES.includes(type))            return <Box className={className} />;
-  return <FileText className={className} />;
+function FileIcon({ type, className, strokeWidth }: { type: string; className?: string; strokeWidth?: number }) {
+  if (type === "xlsx" || type === "xls")      return <FileSpreadsheet className={className} strokeWidth={strokeWidth} />;
+  if (type === "dwg"  || type === "dxf")      return <FileCode className={className} strokeWidth={strokeWidth} />;
+  if (CAD_3D_TYPES.includes(type))            return <Box className={className} strokeWidth={strokeWidth} />;
+  return <FileText className={className} strokeWidth={strokeWidth} />;
 }
 
 function initials(name: string) {
@@ -71,6 +72,61 @@ const STATUS_CFG = {
 };
 
 const inputCls = "w-full rounded-xl border border-border bg-background px-4 py-2.5 text-[14px] outline-none transition-all focus:border-orange-400 focus:ring-2 focus:ring-orange-400/15 placeholder:text-muted-foreground/30";
+
+// FIX: the list-view header and each data row were separate CSS Grid
+// containers that both used `auto`-sized columns (grid-cols-[2fr_1fr_auto_
+// auto_auto_auto]). `auto` tracks size to *that container's own content*, and
+// since each row is its own independent grid, the "Version"/"Updated"/
+// "Status" column widths could differ row-to-row and never lined up with the
+// header's own (much shorter) label text — this is what produced the
+// reported misalignment. Fixed pixel widths for those columns guarantee the
+// header and every row size identically.
+const TABLE_GRID_COLS = "grid-cols-[minmax(0,2fr)_130px_100px_120px_130px_84px]";
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Toast notifications — lightweight, self-contained (no extra deps).
+   Surfaces success/error feedback for upload, download, preview, version and
+   delete actions instead of failing silently.
+───────────────────────────────────────────────────────────────────────────── */
+interface Toast { id: number; kind: "success" | "error"; message: string; }
+
+function useToasts() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const idRef = useRef(0);
+  const notify = useCallback((kind: Toast["kind"], message: string) => {
+    const id = ++idRef.current;
+    setToasts(t => [...t, { id, kind, message }]);
+    window.setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000);
+  }, []);
+  const dismiss = useCallback((id: number) => setToasts(t => t.filter(x => x.id !== id)), []);
+  return { toasts, notify, dismiss };
+}
+
+function ToastStack({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
+  if (toasts.length === 0) return null;
+  return createPortal(
+    <div className="fixed bottom-5 right-5 z-[100] flex flex-col gap-2 w-full max-w-sm">
+      {toasts.map(t => (
+        <div key={t.id}
+          className={cn(
+            "flex items-start gap-2.5 rounded-xl border px-4 py-3 shadow-xl backdrop-blur bg-card animate-in fade-in slide-in-from-bottom-2",
+            t.kind === "success"
+              ? "border-emerald-200 dark:border-emerald-500/30"
+              : "border-rose-200 dark:border-rose-500/30"
+          )}>
+          {t.kind === "success"
+            ? <CheckCircle2 className="h-4.5 w-4.5 shrink-0 text-emerald-500 mt-0.5" />
+            : <XCircle className="h-4.5 w-4.5 shrink-0 text-rose-500 mt-0.5" />}
+          <p className="flex-1 text-[13px] font-medium leading-snug">{t.message}</p>
+          <button onClick={() => dismiss(t.id)} className="shrink-0 text-muted-foreground hover:text-foreground transition-colors">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+    </div>,
+    document.body
+  );
+}
 
 /* ─────────────────────────────────────────────────────────────────────────────
    3D STL Preview Modal — uses Three.js loaded via dynamic import / CDN script
@@ -671,6 +727,17 @@ const CATEGORIES = [
 const ACCEPT_ATTR = ".pdf,.doc,.docx,.xls,.xlsx,.stl,.step,.stp,.f3d,.prt,.dxf,.dwg,.png,.jpg,.jpeg,.gif,.webp,.svg,.zip,.rar,.7z,.tar,.gz,.txt,.csv,.xml,.json";
 
 function UploadModal({ projectId, onClose, onSuccess }: UploadModalProps) {
+  const { user } = useAuth();
+  // Admin / project_manager pick Company -> Customer Admin -> Project manually,
+  // since they can upload on behalf of any organization. customer_admin and
+  // customer_user accounts only ever belong to one company, so for them the
+  // company (and, for customer_admin, their own "customer admin" identity)
+  // is fetched automatically instead of being a manual dropdown step.
+  const isRestricted =
+    user?.role === "customer_admin" ||
+    user?.role === "customer_user" ||
+    user?.role === "guest";
+
   const [title, setTitle]       = useState("");
   const [desc, setDesc]         = useState("");
   const [category, setCategory] = useState("other");
@@ -694,14 +761,67 @@ function UploadModal({ projectId, onClose, onSuccess }: UploadModalProps) {
   const [adminsLoading,    setAdminsLoading]    = useState(false);
   const [projectsLoading,  setProjectsLoading]  = useState(false);
 
+  // ── Auto-fetch destination for customer_admin / customer_user / guest ──────
+  // Company: the companies dropdown endpoint is already scoped server-side to
+  // return only the caller's own company for these roles, so the first (and
+  // only) result IS their company — no manual selection needed.
+  // Customer Admin: if the logged-in user IS a customer_admin, they are their
+  // own "customer admin" — auto-selected, not chosen from a list. Either way,
+  // the project list is fetched directly via listProjects(), which the
+  // backend already scopes to projects the user is a member of.
   useEffect(() => {
-    if (projectId) return;
+    if (projectId || !isRestricted || !user) return;
+
+    setCompaniesLoading(true);
+    setAdminsLoading(true);
+    setProjectsLoading(true);
+
+    Promise.all([
+      documentsService.listCompanies(),
+      documentsService.listProjects(),
+    ])
+      .then(([cs, ps]) => {
+        setCompanies(cs);
+        const myCompany = cs[0];
+        if (myCompany) setSelCompany(myCompany.id);
+
+        if (user.role === "customer_admin") {
+          const self: CustomerAdminOption = {
+            id:          user.id,
+            name:        user.name ?? user.email ?? "You",
+            email:       user.email ?? "",
+            company:     myCompany?.id ?? "",
+            project_ids: ps.map(p => p.id),
+          };
+          setCustomerAdmins([self]);
+          setSelAdmin(self.id);
+        }
+
+        setAllCompanyProjects(ps);
+        setAdminProjects(ps);
+        if (ps.length > 0 && !selProject) setSelProject(ps[0].id);
+      })
+      .catch(() => {
+        setCompanies([]);
+        setAllCompanyProjects([]);
+        setAdminProjects([]);
+      })
+      .finally(() => {
+        setCompaniesLoading(false);
+        setAdminsLoading(false);
+        setProjectsLoading(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, isRestricted, user]);
+
+  useEffect(() => {
+    if (projectId || isRestricted) return;
     setCompaniesLoading(true);
     documentsService.listCompanies()
       .then(cs => setCompanies(cs))
       .catch(() => setCompanies([]))
       .finally(() => setCompaniesLoading(false));
-  }, [projectId]);
+  }, [projectId, isRestricted]);
 
   const handleCompanyChange = async (id: number | undefined) => {
     setSelCompany(id);
@@ -829,8 +949,70 @@ function UploadModal({ projectId, onClose, onSuccess }: UploadModalProps) {
             )}
           </div>
 
-          {/* Cascade selectors */}
-          {!projectId && (
+          {/* Destination — auto-fetched for customer_admin / customer_user / guest */}
+          {!projectId && isRestricted && (
+            <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/50">Destination</p>
+
+              {/* Company — auto-fetched, read-only */}
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">
+                  <Building2 className="h-3.5 w-3.5" /> Company
+                </label>
+                <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-[13px]">
+                  {companiesLoading ? (
+                    <><Loader2 className="h-4 w-4 animate-spin shrink-0 text-muted-foreground/60" /> <span className="text-muted-foreground/60">Fetching your company…</span></>
+                  ) : (
+                    <span className="font-semibold">{companies.find(c => c.id === selCompany)?.name ?? "—"}</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Customer Admin — auto-fetched, read-only (self, when the user IS a customer_admin) */}
+              {user?.role === "customer_admin" && (
+                <div>
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">
+                    <Users className="h-3.5 w-3.5" /> Customer Admin
+                  </label>
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-[13px]">
+                    {adminsLoading ? (
+                      <><Loader2 className="h-4 w-4 animate-spin shrink-0 text-muted-foreground/60" /> <span className="text-muted-foreground/60">Fetching…</span></>
+                    ) : (
+                      <span className="font-semibold">{customerAdmins.find(ca => ca.id === selAdmin)?.name ?? "You"}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Project — still a real choice, scoped to what this user can access */}
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-[.12em] text-muted-foreground/60">
+                  <FolderOpen className="h-3.5 w-3.5" /> Project *
+                </label>
+                {projectsLoading ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-[13px] text-muted-foreground/60">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" /> Loading projects…
+                  </div>
+                ) : adminProjects.length === 0 ? (
+                  <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-amber-200 dark:border-amber-500/25 bg-amber-50 dark:bg-amber-500/5 px-4 py-2.5 text-[13px] text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-4 w-4 shrink-0" /> No projects assigned to you yet
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <select required className={cn(inputCls, "appearance-none pr-10")} value={selProject ?? ""}
+                      onChange={e => setSelProject(e.target.value ? Number(e.target.value) : undefined)}>
+                      <option value="" disabled>Select a project…</option>
+                      {adminProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Cascade selectors — admin / project_manager only, choosing on behalf of any company */}
+          {!projectId && !isRestricted && (
             <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">
               <p className="text-[11px] font-bold uppercase tracking-[.15em] text-muted-foreground/50">Select destination</p>
 
@@ -1161,12 +1343,27 @@ function VersionHistoryDrawer({ doc, onClose }: { doc: Document; onClose: () => 
 /* ─────────────────────────────────────────────────────────────────────────────
    Delete Confirm
 ───────────────────────────────────────────────────────────────────────────── */
-function DeleteModal({ doc, onClose, onSuccess }: { doc: Document; onClose: () => void; onSuccess: (id: number) => void }) {
+function DeleteModal({ doc, onClose, onSuccess, onError }: { doc: Document; onClose: () => void; onSuccess: (id: number) => void; onError?: (message: string) => void }) {
   const [deleting, setDeleting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const confirm = async () => {
     setDeleting(true);
-    try { await documentsService.delete(doc.id); onSuccess(doc.id); }
-    catch {} finally { setDeleting(false); }
+    setErr(null);
+    try {
+      await documentsService.delete(doc.id);
+      onSuccess(doc.id);
+    } catch (e: any) {
+      // FIX: errors here used to be swallowed entirely (`catch {}`), so a
+      // failed delete (permission denied, network error, etc.) looked
+      // identical to success from the user's point of view — the modal just
+      // sat there. Now we show the reason inline and also bubble it up as a
+      // toast.
+      const message = e?.response?.data?.error || "Failed to delete the document. Please try again.";
+      setErr(message);
+      onError?.(message);
+    } finally {
+      setDeleting(false);
+    }
   };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1182,6 +1379,11 @@ function DeleteModal({ doc, onClose, onSuccess }: { doc: Document; onClose: () =
           <p className="mt-3 text-[14px] leading-relaxed text-muted-foreground">
             "<strong>{doc.title}</strong>" and all its version history will be permanently deleted.
           </p>
+          {err && (
+            <div className="mt-4 flex items-center gap-2.5 rounded-xl border border-rose-200 dark:border-rose-500/25 bg-rose-50 dark:bg-rose-500/10 px-4 py-3 text-[13px] text-rose-700 dark:text-rose-400">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> {err}
+            </div>
+          )}
           <div className="mt-6 flex gap-3">
             <button onClick={onClose} disabled={deleting} className="flex-1 rounded-xl border border-border py-2.5 text-[14px] font-semibold text-muted-foreground hover:bg-muted transition-colors">Cancel</button>
             <button onClick={confirm} disabled={deleting} className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-rose-500 py-2.5 text-[14px] font-bold text-white hover:bg-rose-600 disabled:opacity-60 transition-colors">
@@ -1267,18 +1469,55 @@ function ActionMenu({ doc, canManage, downloading, onDownload, onPreview, onVers
   onHistory: () => void; onDelete: () => void; onUpdate: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos]   = useState<{ top: number; left: number; openUp: boolean } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
   const is3D = CAD_3D_TYPES.includes(doc.file_type);
+
+  // FIX: this menu used to be `absolute` inside the table row, which lives
+  // inside a `overflow-hidden` table container (needed to keep the table's
+  // rounded corners). Overflow clipping applies to absolutely-positioned
+  // descendants too, so the menu was rendering but invisible — the chevron
+  // still flipped because that state change is local, but the panel itself
+  // was clipped away. Rendering it through a portal with `position: fixed`,
+  // computed from the trigger button's own bounding box, escapes any
+  // ancestor's overflow/clipping entirely and also lets us flip the menu
+  // upward when it would otherwise run off the bottom of the viewport.
+  const openMenu = () => {
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const menuHeight = canManage ? 230 : 140;
+    const openUp = window.innerHeight - rect.bottom < menuHeight && rect.top > menuHeight;
+    setPos({
+      top:  openUp ? rect.top - 6 : rect.bottom + 6,
+      left: Math.max(8, rect.right - 208), // 208px ≈ menu width, keep on-screen
+      openUp,
+    });
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onScrollOrResize = () => setOpen(false);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [open]);
 
   return (
     <div className="relative">
-      <button onClick={e => { e.stopPropagation(); setOpen(v => !v); }}
+      <button ref={btnRef} onClick={e => { e.stopPropagation(); open ? setOpen(false) : openMenu(); }}
         className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
         <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
       </button>
-      {open && (
+      {open && pos && createPortal(
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-50 mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-card shadow-xl">
+          <div className="fixed inset-0 z-[90]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[95] w-52 overflow-hidden rounded-xl border border-border bg-card shadow-xl"
+            style={{ top: pos.openUp ? undefined : pos.top, bottom: pos.openUp ? window.innerHeight - pos.top : undefined, left: pos.left }}>
             <div className="p-1">
               <button onClick={() => { onPreview(); setOpen(false); }}
                 className="flex w-full items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-[13px] font-medium hover:bg-muted transition-colors">
@@ -1312,7 +1551,8 @@ function ActionMenu({ doc, canManage, downloading, onDownload, onPreview, onVers
               )}
             </div>
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   );
@@ -1326,8 +1566,21 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
 
   const canManage = user?.role === "admin" || user?.role === "project_manager";
 
-  // customer_admin can also upload — their project scope is enforced by backend
-  const canUpload = canManage || user?.role === "customer_admin" || user?.role === "guest";
+  // FIX: `customer_user` was missing from this list. The backend's
+  // `_can_upload()` (documents/views.py) already allows admin,
+  // project_manager, customer_admin, AND customer_user to upload — any role
+  // that's simply a member of a project is meant to be able to upload/view/
+  // download for that project. The frontend was silently hiding the Upload
+  // button for customer_user accounts even though the backend would have
+  // accepted their request. Guests are the one role that need an explicit
+  // admin-granted GuestPermission, so we still show the button for them and
+  // let the backend's 403 (surfaced via toast) explain why if they lack it,
+  // rather than guessing their permission state client-side.
+  const canUpload =
+    canManage ||
+    user?.role === "customer_admin" ||
+    user?.role === "customer_user" ||
+    user?.role === "guest";
 
   const [documents, setDocuments]     = useState<Document[]>([]);
   const [categories, setCategories]   = useState<Category[]>([]);
@@ -1521,21 +1774,44 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
 
   const allCategories = ["All", ...categories.map(c => c.label)];
 
+  const { toasts, notify, dismiss } = useToasts();
+
   const handleDownload = async (doc: Document) => {
     setDownloading(doc.id);
-    try { await documentsService.download(doc.id, `${doc.title}.${doc.file_type}`); }
-    finally { setDownloading(null); }
+    try {
+      await documentsService.download(doc.id, `${doc.title}.${doc.file_type}`);
+    } catch (e: any) {
+      notify("error", e?.response?.data?.error || e?.message || "Download failed. Please try again.");
+    } finally {
+      setDownloading(null);
+    }
   };
 
-  const handlePreview = (doc: Document) => {
+  const [previewLoadingId, setPreviewLoadingId] = useState<number | null>(null);
+
+  const handlePreview = async (doc: Document) => {
     const type = doc.file_type;
     const isPreviewable = ["pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "txt", "csv", "xml", "json"].includes(type);
     const is3D = CAD_3D_TYPES.includes(type);
     if (isPreviewable || is3D) {
       setPreviewDoc(doc);
-    } else {
-      // For doc/docx/xls/xlsx open directly (Google Docs Viewer as fallback, or just open URL)
-      window.open(doc.file_url, "_blank");
+      return;
+    }
+    // FIX: this used to be `window.open(doc.file_url, "_blank")`. Two bugs
+    // stacked here: (1) the backend never actually returned a `file_url`
+    // field (only `file`), so this was always `window.open(undefined, ...)`;
+    // (2) even with the field name fixed, the underlying media file sits
+    // behind auth — a bare window.open sends no Authorization header, so the
+    // request would 401 or hit an HTML login redirect. openInNewTab() routes
+    // the file through the same authenticated axios instance used for inline
+    // preview, then opens the resulting local blob URL.
+    setPreviewLoadingId(doc.id);
+    try {
+      await documentsService.openInNewTab(doc.id, `${doc.title}.${doc.file_type}`);
+    } catch (e: any) {
+      notify("error", e?.response?.data?.error || e?.message || "Couldn't open the file for preview.");
+    } finally {
+      setPreviewLoadingId(null);
     }
   };
 
@@ -1676,7 +1952,7 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
         {/* List view */}
         {view === "list" && (
           <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-            <div className="grid grid-cols-[2fr_1fr_auto_auto_auto_auto] items-center gap-4 border-b border-border bg-muted/30 px-6 py-3">
+            <div className={cn("grid items-center gap-4 border-b border-border bg-muted/30 px-6 py-3", TABLE_GRID_COLS)}>
               {["Document", "Category", "Version", "Updated", "Status", ""].map((h, i) => (
                 <span key={i} className={cn("text-[11px] font-bold uppercase tracking-[.12em] text-muted-foreground/60", i === 5 && "text-right")}>{h}</span>
               ))}
@@ -1694,7 +1970,7 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
                   const status = STATUS_CFG[d.status] ?? STATUS_CFG.draft;
                   const is3D   = CAD_3D_TYPES.includes(d.file_type);
                   return (
-                    <div key={d.id} className="grid grid-cols-[2fr_1fr_auto_auto_auto_auto] items-center gap-4 px-6 py-4 hover:bg-muted/20 transition-colors group">
+                    <div key={d.id} className={cn("grid items-center gap-4 px-6 py-4 hover:bg-muted/20 transition-colors group", TABLE_GRID_COLS)}>
                       <div className="flex items-center gap-3.5 min-w-0">
                         <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", meta.bg)}>
                           <FileIcon type={d.file_type} className={cn("h-5 w-5", meta.color)} strokeWidth={1.5} />
@@ -1707,18 +1983,24 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
                             {d.version_count > 0 && <span className="flex items-center gap-1 text-[11px] text-blue-500"><History className="h-3 w-3" /> {d.version_count} prev</span>}
                             {is3D && <span className="flex items-center gap-1 text-[10px] font-bold text-violet-500 bg-violet-50 dark:bg-violet-500/10 rounded px-1.5 py-0.5"><Box className="h-3 w-3" /> 3D</span>}
                           </div>
+                          <p className="mt-0.5 truncate text-[11px] text-muted-foreground/70">
+                            Uploaded by <span className="font-medium text-muted-foreground">{d.uploaded_by_name || "Unknown"}</span> · {fmt(d.created_at)}
+                          </p>
                         </div>
                       </div>
                       <span className="rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-[12px] font-semibold capitalize truncate">{d.category}</span>
                       <span className="rounded-lg bg-muted px-3 py-1.5 font-mono text-[12px] font-bold">{d.version}</span>
-                      <span className="text-[13px] tabular-nums text-muted-foreground whitespace-nowrap">{fmt(d.updated_at)}</span>
+                      <span className="text-[13px] tabular-nums text-muted-foreground whitespace-nowrap" title={`Last updated ${fmt(d.updated_at)}`}>{fmt(d.updated_at)}</span>
                       <span className={cn("rounded-lg px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide whitespace-nowrap", status.cls)}>{status.label}</span>
                       <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={() => handlePreview(d)}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                          disabled={previewLoadingId === d.id}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
                           title={is3D ? "3D Preview" : "Preview"}>
-                          {is3D ? <Box className="h-4 w-4 text-violet-500" /> : <Eye className="h-4 w-4" />}
+                          {previewLoadingId === d.id
+                            ? <Loader2 className="h-4 w-4 animate-spin" />
+                            : is3D ? <Box className="h-4 w-4 text-violet-500" /> : <Eye className="h-4 w-4" />}
                         </button>
                         <ActionMenu doc={d} canManage={canManage} downloading={downloading === d.id}
                           onDownload={() => handleDownload(d)}
@@ -1819,19 +2101,33 @@ export default function Documents({ projectId }: { projectId?: number } = {}) {
         <UploadModal
           projectId={projectId}
           onClose={() => setShowUpload(false)}
-          onSuccess={doc => { setDocuments(p => [doc, ...p]); setShowUpload(false); }}
+          onSuccess={doc => {
+            setDocuments(p => [doc, ...p]);
+            setShowUpload(false);
+            notify("success", `"${doc.title}" was uploaded successfully.`);
+          }}
         />
       )}
       {versionDoc && (
         <VersionModal doc={versionDoc} onClose={() => setVersionDoc(null)}
-          onSuccess={updated => { setDocuments(p => p.map(d => d.id === updated.id ? updated : d)); setVersionDoc(null); }} />
+          onSuccess={updated => {
+            setDocuments(p => p.map(d => d.id === updated.id ? updated : d));
+            setVersionDoc(null);
+            notify("success", `"${updated.title}" was updated to ${updated.version}.`);
+          }} />
       )}
       {historyDoc && <VersionHistoryDrawer doc={historyDoc} onClose={() => setHistoryDoc(null)} />}
       {deleteDoc && (
         <DeleteModal doc={deleteDoc} onClose={() => setDeleteDoc(null)}
-          onSuccess={id => { setDocuments(p => p.filter(d => d.id !== id)); setDeleteDoc(null); }} />
+          onSuccess={id => {
+            setDocuments(p => p.filter(d => d.id !== id));
+            setDeleteDoc(null);
+            notify("success", "Document deleted.");
+          }}
+          onError={msg => notify("error", msg)} />
       )}
       {previewDoc && <FilePreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} />}
+      <ToastStack toasts={toasts} dismiss={dismiss} />
     </div>
   );
 }

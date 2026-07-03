@@ -42,6 +42,25 @@ export interface TicketComment {
   updated_at: string;
 }
 
+/** Full profile of the assigned support engineer — shown once assigned */
+export interface AssignedEngineer {
+  id: number;
+  full_name: string;
+  email: string;
+  designation: string;
+  phone: string | null;
+  avatar_url: string | null;
+}
+
+export interface TicketStatusHistory {
+  id: number;
+  from_status: string;
+  to_status: string;
+  note: string;
+  changed_by_name: string;
+  changed_at: string;
+}
+
 export interface Ticket {
   id: number;
   ticket_id: string;
@@ -65,6 +84,9 @@ export interface Ticket {
 export interface TicketDetail extends Ticket {
   comments: TicketComment[];
   attachments: TicketAttachment[];
+  status_history: TicketStatusHistory[];
+  assigned_engineer: AssignedEngineer | null;
+  resolved_at: string | null;
   time_to_resolve: number | null;
 }
 
@@ -149,6 +171,7 @@ export const ticketsService = {
     return data;
   },
 };
+
 export const projectsService = {
   list: async (): Promise<Project[]> => {
     const { data } = await api.get("/projects/", { params: { page_size: 500 } });

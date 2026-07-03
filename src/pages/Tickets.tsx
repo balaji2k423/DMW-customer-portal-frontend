@@ -3,16 +3,19 @@ import {
   Plus, ChevronRight, Search, AlertTriangle,
   Flag, Layers, Activity, CheckCircle2, Clock,
   SlidersHorizontal, TicketIcon, ChevronDown, Check,
-  BarChart3, Building2, Users,
+  BarChart3, Building2, Users, RefreshCw,
 } from "lucide-react";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { ticketsService, projectsService, customersService, type Ticket, type TicketSummary, type CustomerOption, type CustomerAdminOption } from "@/services/tickets";
+import {
+  ticketsService, projectsService, customersService,
+  type Ticket, type TicketSummary, type CustomerOption, type CustomerAdminOption,
+} from "@/services/tickets";
 import { cn } from "@/lib/utils";
 import NewTicketModal from "./NewTicketModal";
 
-/* ─── Brand tokens (matches Dashboard) ─── */
+/* ─── Brand tokens ─── */
 const BRAND       = "#E8510A";
 const BRAND_LIGHT = "#FEF0E9";
 const BRAND_MID   = "#F97316";
@@ -23,17 +26,18 @@ const STATUS_MAP: Record<string, string> = {
   on_hold: "on-hold", resolved: "resolved", closed: "closed",
 };
 
+// FIX: both customer_admin AND customer_user can raise tickets
 const CUSTOMER_ROLES = ["customer_admin", "customer_user"];
 function isCustomer(role?: string) { return CUSTOMER_ROLES.includes(role ?? ""); }
 
 type UiStatus = "open" | "in-progress" | "on-hold" | "resolved" | "closed";
 
 const S: Record<UiStatus, { label: string; dot: string; badge: string; card: string; bar: string; node: string }> = {
-  "open":        { label: "Open",        dot: "bg-amber-400",   badge: "bg-amber-500/10 text-amber-600 border border-amber-200 dark:border-amber-900",    card: "border-l-amber-400",   bar: BRAND,      node: "bg-amber-500/10 border-amber-300 dark:border-amber-500/30" },
-  "in-progress": { label: "In Progress", dot: "bg-orange-500 animate-pulse", badge: "text-white border-transparent", card: "border-l-orange-400", bar: BRAND_MID, node: "border-orange-300 dark:border-orange-500/30" },
-  "on-hold":     { label: "On Hold",     dot: "bg-slate-400",   badge: "bg-muted text-muted-foreground border border-border",                             card: "border-l-border",      bar: "#94a3b8",  node: "bg-muted border-border" },
-  "resolved":    { label: "Resolved",    dot: "bg-emerald-500", badge: "bg-emerald-500/10 text-emerald-600 border border-emerald-200 dark:border-emerald-900", card: "border-l-emerald-400", bar: "#10b981", node: "bg-emerald-500/10 border-emerald-300 dark:border-emerald-500/30" },
-  "closed":      { label: "Closed",      dot: "bg-slate-300",   badge: "bg-muted text-muted-foreground/50 border border-border",                          card: "border-l-border",      bar: "#cbd5e1",  node: "bg-muted/50 border-border" },
+  "open":        { label: "Open",        dot: "bg-amber-400",             badge: "bg-amber-500/10 text-amber-600 border border-amber-200 dark:border-amber-900",          card: "border-l-amber-400",   bar: BRAND,     node: "bg-amber-500/10 border-amber-300 dark:border-amber-500/30"         },
+  "in-progress": { label: "In Progress", dot: "bg-orange-500 animate-pulse", badge: "text-white border-transparent",                                                       card: "border-l-orange-400",  bar: BRAND_MID, node: "border-orange-300 dark:border-orange-500/30"                       },
+  "on-hold":     { label: "On Hold",     dot: "bg-slate-400",             badge: "bg-muted text-muted-foreground border border-border",                                    card: "border-l-border",      bar: "#94a3b8",  node: "bg-muted border-border"                                            },
+  "resolved":    { label: "Resolved",    dot: "bg-emerald-500",           badge: "bg-emerald-500/10 text-emerald-600 border border-emerald-200 dark:border-emerald-900",  card: "border-l-emerald-400", bar: "#10b981",  node: "bg-emerald-500/10 border-emerald-300 dark:border-emerald-500/30"  },
+  "closed":      { label: "Closed",      dot: "bg-slate-300",             badge: "bg-muted text-muted-foreground/50 border border-border",                                 card: "border-l-border",      bar: "#cbd5e1",  node: "bg-muted/50 border-border"                                         },
 };
 
 const P: Record<string, { label: string; badge: string }> = {
@@ -67,12 +71,16 @@ function Divider({ label }: { label: string }) {
   );
 }
 
-/* ─── KPI Stat card (matches dashboard) ─── */
-function StatCard({ value, label, iconBg, textColor }: { value: number; label: string; iconBg: string; textColor: string }) {
+/* ─── KPI Stat card ─── */
+function StatCard({
+  value, label, iconBg, textColor, icon,
+}: {
+  value: number; label: string; iconBg: string; textColor: string; icon?: React.ReactNode;
+}) {
   return (
     <div className="bg-card rounded-2xl border border-border shadow-sm p-5 flex flex-col gap-3">
       <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: iconBg }}>
-        <Layers className="h-5 w-5 text-white" strokeWidth={1.75} />
+        {icon ?? <Layers className="h-5 w-5 text-white" strokeWidth={1.75} />}
       </div>
       <div>
         <p className={cn("text-2xl font-bold tabular-nums tracking-tight", textColor)}>{value}</p>
@@ -101,8 +109,10 @@ function FilterDropdown({ options, value, onChange, icon }: {
 
   return (
     <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(v => !v)}
-        className={cn("flex min-w-[160px] items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-[13px] font-semibold transition-all",
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={cn(
+          "flex min-w-[160px] items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-[13px] font-semibold transition-all",
           open || value
             ? "border-orange-300 dark:border-orange-500/40 bg-orange-50 dark:bg-orange-500/5 text-orange-600 dark:text-orange-400"
             : "border-border bg-card hover:bg-muted/50 text-muted-foreground hover:text-foreground"
@@ -116,7 +126,8 @@ function FilterDropdown({ options, value, onChange, icon }: {
           <div className="p-1.5 max-h-72 overflow-y-auto">
             {options.map(opt => (
               <button key={opt.value} onClick={() => { onChange(opt.value); setOpen(false); }}
-                className={cn("flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors",
+                className={cn(
+                  "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors",
                   value === opt.value ? "bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" : "hover:bg-muted"
                 )}>
                 <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", value === opt.value ? "bg-orange-500" : "bg-muted-foreground/30")} />
@@ -139,33 +150,36 @@ export default function Tickets() {
   const { toast } = useToast();
   const { user }  = useAuth();
 
+  // FIX: customer_user should also be able to raise tickets (backend now allows it)
   const canRaise  = isCustomer(user?.role);
   const canManage = user?.role === "admin" || user?.role === "project_manager";
 
-  const [query,        setQuery]        = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [tickets,      setTickets]      = useState<Ticket[]>([]);
-  const [summary,      setSummary]      = useState<TicketSummary | null>(null);
-  const [loading,      setLoading]      = useState(true);
-  const [error,        setError]        = useState<string | null>(null);
-  const [modalOpen,    setModalOpen]    = useState(false);
-  const [projects,             setProjects]             = useState<{ id: number; name: string; customer_id?: number | null; customer_name?: string | null }[]>([]);
-  const [customers,            setCustomers]            = useState<CustomerOption[]>([]);
-  const [customerAdmins,       setCustomerAdmins]       = useState<CustomerAdminOption[]>([]);
-  const [activeCustomerId,     setActiveCustomerId]     = useState<number | string | undefined>(undefined);
-  const [activeAdminId,        setActiveAdminId]        = useState<number | undefined>(undefined);
-  const [activeProjectId,      setActiveProjectId]      = useState<number | undefined>(undefined);
+  const [query,            setQuery]            = useState("");
+  const [statusFilter,     setStatusFilter]     = useState("");
+  const [tickets,          setTickets]          = useState<Ticket[]>([]);
+  const [summary,          setSummary]          = useState<TicketSummary | null>(null);
+  const [loading,          setLoading]          = useState(true);
+  const [refreshing,       setRefreshing]       = useState(false);
+  const [error,            setError]            = useState<string | null>(null);
+  const [modalOpen,        setModalOpen]        = useState(false);
+  const [projects,         setProjects]         = useState<{ id: number; name: string; customer_id?: number | null; customer_name?: string | null }[]>([]);
+  const [customers,        setCustomers]        = useState<CustomerOption[]>([]);
+  const [customerAdmins,   setCustomerAdmins]   = useState<CustomerAdminOption[]>([]);
+  const [activeCustomerId, setActiveCustomerId] = useState<number | string | undefined>(undefined);
+  const [activeAdminId,    setActiveAdminId]    = useState<number | undefined>(undefined);
+  const [activeProjectId,  setActiveProjectId]  = useState<number | undefined>(undefined);
 
-  const load = (cid?: number | string, pid?: number) => {
-    setLoading(true);
+  const load = useCallback((cid?: number | string, pid?: number, silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
     const params: Record<string, any> = {};
     if (cid) params.customer_id = cid;
     if (pid) params.project     = pid;
     Promise.all([ticketsService.list(params), ticketsService.summary(params)])
-      .then(([list, sum]) => { setTickets(list); setSummary(sum); })
+      .then(([list, sum]) => { setTickets(list); setSummary(sum); setError(null); })
       .catch(() => setError("Failed to load tickets. Please try again."))
-      .finally(() => setLoading(false));
-  };
+      .finally(() => { setLoading(false); setRefreshing(false); });
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -180,14 +194,12 @@ export default function Tickets() {
       setCustomerAdmins(cas);
     });
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Cascading derived lists ──────────────────────────────────────────────
-  // activeCustomerId is now the company NAME string (tickets/customers/ returns name as id).
-  // This matches CustomerAdminOption.company and project.customer_name directly.
+  // Cascading derived lists
   const activeCustomerName = activeCustomerId as string | undefined;
 
-  // Filter admins: ca.company is a name string — direct match
   const filteredCustomerAdmins: CustomerAdminOption[] = activeCustomerName
     ? customerAdmins.filter(ca => ca.company === activeCustomerName)
     : customerAdmins;
@@ -207,11 +219,9 @@ export default function Tickets() {
     return result;
   })();
 
-  // Re-load tickets + refresh admin list whenever the customer changes
   useEffect(() => {
     if (!loading) {
       load(activeCustomerId, activeProjectId);
-      // Re-fetch admins filtered by company name (activeCustomerId IS the name now)
       customersService.listCustomerAdmins(activeCustomerId as string | undefined)
         .then(setCustomerAdmins)
         .catch(() => {});
@@ -253,9 +263,13 @@ export default function Tickets() {
   if (error) return (
     <div className="flex h-64 items-center justify-center">
       <div className="flex flex-col items-center gap-3 text-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 dark:bg-rose-500/10"><AlertTriangle className="h-7 w-7 text-rose-500" /></div>
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 dark:bg-rose-500/10">
+          <AlertTriangle className="h-7 w-7 text-rose-500" />
+        </div>
         <p className="text-[15px] font-bold">{error}</p>
-        <button onClick={() => window.location.reload()} className="text-[13px] font-semibold hover:underline" style={{ color: BRAND }}>Try again</button>
+        <button onClick={() => load()} className="text-[13px] font-semibold hover:underline" style={{ color: BRAND }}>
+          Try again
+        </button>
       </div>
     </div>
   );
@@ -281,7 +295,6 @@ export default function Tickets() {
                 options={[{ value: "", label: "All Customers" }, ...customers.map(c => ({ value: String(c.id), label: c.name }))]}
                 value={activeCustomerId ?? ""}
                 onChange={v => {
-                  // id is now the company name string (same as milestones endpoint)
                   setActiveCustomerId(v || undefined);
                   setActiveAdminId(undefined);
                   setActiveProjectId(undefined);
@@ -289,7 +302,7 @@ export default function Tickets() {
                 icon={<Building2 className="h-3.5 w-3.5" />}
               />
             )}
-            {/* Admin filter — staff only, filtered by selected company */}
+            {/* Admin filter — staff only */}
             {canManage && customerAdmins.length > 0 && (
               <FilterDropdown
                 options={[{ value: "", label: "All Admins" }, ...filteredCustomerAdmins.map(a => ({ value: String(a.id), label: a.name }))]}
@@ -318,15 +331,36 @@ export default function Tickets() {
             {/* Search */}
             <div className="relative">
               <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
-              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search ID or subject…"
-                className="w-52 rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-[13px] font-medium placeholder:text-muted-foreground/30 outline-none transition-all focus:border-orange-400/50 focus:ring-2 focus:ring-orange-400/10" />
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Search ID or subject…"
+                className="w-52 rounded-xl border border-border bg-card py-2.5 pl-10 pr-4 text-[13px] font-medium placeholder:text-muted-foreground/30 outline-none transition-all focus:border-orange-400/50 focus:ring-2 focus:ring-orange-400/10"
+              />
             </div>
             {/* Status filter */}
-            <FilterDropdown options={STATUS_FILTER_OPTIONS} value={statusFilter} onChange={setStatusFilter} icon={<SlidersHorizontal className="h-3.5 w-3.5" />} />
+            <FilterDropdown
+              options={STATUS_FILTER_OPTIONS}
+              value={statusFilter}
+              onChange={setStatusFilter}
+              icon={<SlidersHorizontal className="h-3.5 w-3.5" />}
+            />
+            {/* Refresh */}
+            <button
+              onClick={() => load(activeCustomerId, activeProjectId, true)}
+              disabled={refreshing}
+              className="flex items-center justify-center h-10 w-10 rounded-xl border border-border bg-card text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50"
+              title="Refresh"
+            >
+              <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
+            </button>
+            {/* Raise ticket — FIX: customer_user can also raise tickets */}
             {canRaise && (
-              <button onClick={() => setModalOpen(true)}
-                className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-bold text-white shadow-sm transition-all hover:opacity-90"
-                style={{ background: BRAND }}>
+              <button
+                onClick={() => setModalOpen(true)}
+                className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-bold text-white shadow-sm transition-all hover:opacity-90 active:scale-95"
+                style={{ background: BRAND }}
+              >
                 <Plus className="h-4 w-4" /> Raise Ticket
               </button>
             )}
@@ -335,10 +369,34 @@ export default function Tickets() {
 
         {/* ── KPI cards ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard value={openCount}  label="Open"          iconBg={BRAND}      textColor="text-orange-600 dark:text-orange-400" />
-          <StatCard value={inProgress} label="In Progress"   iconBg={BRAND_MID}  textColor="text-amber-600 dark:text-amber-400" />
-          <StatCard value={resolved}   label="Resolved"      iconBg="#10b981"    textColor="text-emerald-600 dark:text-emerald-400" />
-          <StatCard value={overdue}    label="SLA Breached"  iconBg="#ef4444"    textColor="text-rose-600 dark:text-rose-400" />
+          <StatCard
+            value={openCount}
+            label="Open"
+            iconBg={BRAND}
+            textColor="text-orange-600 dark:text-orange-400"
+            icon={<Flag className="h-5 w-5 text-white" strokeWidth={1.75} />}
+          />
+          <StatCard
+            value={inProgress}
+            label="In Progress"
+            iconBg={BRAND_MID}
+            textColor="text-amber-600 dark:text-amber-400"
+            icon={<Activity className="h-5 w-5 text-white" strokeWidth={1.75} />}
+          />
+          <StatCard
+            value={resolved}
+            label="Resolved"
+            iconBg="#10b981"
+            textColor="text-emerald-600 dark:text-emerald-400"
+            icon={<CheckCircle2 className="h-5 w-5 text-white" strokeWidth={1.75} />}
+          />
+          <StatCard
+            value={overdue}
+            label="SLA Breached"
+            iconBg="#ef4444"
+            textColor="text-rose-600 dark:text-rose-400"
+            icon={<AlertTriangle className="h-5 w-5 text-white" strokeWidth={1.75} />}
+          />
         </div>
 
         {/* ── Progress bar ── */}
@@ -350,12 +408,22 @@ export default function Tickets() {
                 <span className="text-[14px] font-bold">Overall Resolution</span>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-[14px] font-semibold text-muted-foreground">{resolved} <span className="text-muted-foreground/40">/ {total} resolved</span></span>
-                <span className="rounded-lg border px-3 py-1 text-[14px] font-black" style={{ background: BRAND_LIGHT, color: BRAND, borderColor: "#fed7aa" }}>{pct}%</span>
+                <span className="text-[14px] font-semibold text-muted-foreground">
+                  {resolved} <span className="text-muted-foreground/40">/ {total} resolved</span>
+                </span>
+                <span
+                  className="rounded-lg border px-3 py-1 text-[14px] font-black"
+                  style={{ background: BRAND_LIGHT, color: BRAND, borderColor: "#fed7aa" }}
+                >
+                  {pct}%
+                </span>
               </div>
             </div>
             <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: `linear-gradient(to right, ${BRAND}, ${BRAND_MID})` }} />
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${pct}%`, background: `linear-gradient(to right, ${BRAND}, ${BRAND_MID})` }}
+              />
             </div>
           </div>
         )}
@@ -372,7 +440,12 @@ export default function Tickets() {
               </div>
               <p className="text-[16px] font-bold text-muted-foreground/60">No tickets found</p>
               <p className="mt-1.5 text-[14px] text-muted-foreground/40">
-                {query || statusFilter ? "Try adjusting your search or filter." : canRaise ? "Raise your first ticket above." : "No tickets assigned to your projects yet."}
+                {query || statusFilter
+                  ? "Try adjusting your search or filter."
+                  : canRaise
+                    ? "Raise your first ticket above."
+                    : "No tickets assigned to your projects yet."
+                }
               </p>
             </div>
           )}
@@ -387,12 +460,15 @@ export default function Tickets() {
               const isActive = uiStatus === "in-progress";
 
               return (
-                <button key={t.id} onClick={() => navigate(`/tickets/${t.id}`)}
+                <button
+                  key={t.id}
+                  onClick={() => navigate(`/tickets/${t.id}`)}
                   className={cn(
                     "group w-full border-l-[3px] rounded-xl border border-border bg-card text-left",
                     "transition-all duration-200 hover:-translate-y-px hover:shadow-md hover:border-border/60",
                     scfg.card, isClosed && "opacity-55"
-                  )}>
+                  )}
+                >
                   <div className="flex items-center gap-5 px-5 py-4">
                     {/* Index */}
                     <div className="hidden w-8 shrink-0 sm:block">
@@ -400,8 +476,10 @@ export default function Tickets() {
                     </div>
 
                     {/* Status icon node */}
-                    <div className={cn("hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border sm:flex", scfg.node)}
-                      style={isActive ? { background: BRAND_LIGHT, borderColor: BRAND + "60" } : {}}>
+                    <div
+                      className={cn("hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border sm:flex", scfg.node)}
+                      style={isActive ? { background: BRAND_LIGHT, borderColor: BRAND + "60" } : {}}
+                    >
                       {uiStatus === "resolved"    && <CheckCircle2 className="h-4 w-4 text-emerald-500" strokeWidth={2.5} />}
                       {uiStatus === "in-progress" && <Activity     className="h-4 w-4" style={{ color: BRAND }} strokeWidth={2} />}
                       {uiStatus === "open"        && <Flag         className="h-4 w-4 text-amber-500"   strokeWidth={2} />}
@@ -412,15 +490,18 @@ export default function Tickets() {
                     {/* Title + meta */}
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2.5 mb-1">
+                        {/* Ticket ref number */}
                         <span className="text-[12px] font-black tabular-nums text-muted-foreground/40">{t.ticket_id}</span>
                         {t.sla_breached && (
-                          <span className="flex items-center gap-1 text-[11px] font-bold text-rose-500">
+                          <span className="flex items-center gap-1 rounded-md bg-rose-500/10 border border-rose-200 dark:border-rose-500/25 px-2 py-0.5 text-[11px] font-bold text-rose-500">
                             <AlertTriangle className="h-3 w-3" /> SLA
                           </span>
                         )}
                         <span className={cn("rounded-lg px-2.5 py-0.5 text-[11px] font-semibold", pcfg.badge)}>{pcfg.label}</span>
-                        <span className={cn("inline-flex items-center gap-1.5 rounded-lg px-2.5 py-0.5 text-[11px] font-semibold", scfg.badge)}
-                          style={isActive ? { background: BRAND } : {}}>
+                        <span
+                          className={cn("inline-flex items-center gap-1.5 rounded-lg px-2.5 py-0.5 text-[11px] font-semibold", scfg.badge)}
+                          style={isActive ? { background: BRAND } : {}}
+                        >
                           <span className={cn("h-1.5 w-1.5 rounded-full bg-current", isActive && "animate-pulse")} />
                           {scfg.label}
                         </span>
@@ -428,7 +509,9 @@ export default function Tickets() {
                       <p className="truncate text-[15px] font-bold leading-snug transition-colors group-hover:text-orange-600 dark:group-hover:text-orange-400">
                         {t.subject}
                       </p>
-                      {t.project_name && <p className="mt-0.5 text-[12px] font-medium text-muted-foreground/45">{t.project_name}</p>}
+                      {t.project_name && (
+                        <p className="mt-0.5 text-[12px] font-medium text-muted-foreground/45">{t.project_name}</p>
+                      )}
                     </div>
 
                     {/* Right: assignee + date */}
@@ -442,7 +525,10 @@ export default function Tickets() {
                         <p className="mt-0.5 text-[13px] font-bold tabular-nums">{fmt(t.updated_at)}</p>
                       </div>
                       {t.assigned_to_name && (
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white ring-2 ring-white dark:ring-card" style={{ background: BRAND }}>
+                        <div
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white ring-2 ring-white dark:ring-card"
+                          style={{ background: BRAND }}
+                        >
                           {initials(t.assigned_to_name)}
                         </div>
                       )}
@@ -460,7 +546,7 @@ export default function Tickets() {
         <footer className="pt-4 pb-2 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-muted-foreground">
           <div className="flex items-center gap-2">
             <span className="font-bold text-foreground">DMW Robotics</span>
-            <span>© 2023 DMW Industrial Systems GMBH</span>
+            <span>© 2025 DMW Industrial Systems GMBH</span>
           </div>
           <div className="flex items-center gap-5">
             {["Security Policy", "API Docs", "Privacy", "Terms of Service"].map(l => (
@@ -472,7 +558,16 @@ export default function Tickets() {
 
       {/* Modal */}
       {canRaise && (
-        <NewTicketModal open={modalOpen} onClose={() => setModalOpen(false)} onCreated={() => { setModalOpen(false); load(); }} projects={projects} />
+        <NewTicketModal
+          open={modalOpen}
+          onClose={() => setModalOpen(false)}
+          onCreated={() => {
+            setModalOpen(false);
+            load(activeCustomerId, activeProjectId, true);
+            toast({ title: "Ticket raised", description: "Your ticket has been submitted. We'll be in touch shortly." });
+          }}
+          projects={projects}
+        />
       )}
     </div>
   );

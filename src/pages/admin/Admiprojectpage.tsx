@@ -1,8 +1,8 @@
 import { useState } from "react";
 import {
   Search, Plus, Pencil, Trash2, X, Calendar, Users,
-  CheckSquare, Square, Mail, Flag, ChevronDown, ChevronUp,
-  Building2, UserCheck,
+  CheckSquare, Square, Mail, Flag,
+  Building2, UserCheck, ShieldCheck,
 } from "lucide-react";
 import {
   useAdminProjects,
@@ -12,6 +12,9 @@ import {
   useCompanies,
   useCustomerAdminsByCompany,
   useTeamUsers,
+  createProjectMilestones,
+  type MilestoneInput,
+  type ProjectMemberInfo,
 } from "./../../hooks/UseAdminProjects";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -26,6 +29,8 @@ type ProjectForm = {
   start_date:         string;
   expected_end:       string;
   member_assignments: MemberAssignment[];
+  // Admin-chosen date for each of the 5 phases (create only)
+  milestone_dates:    string[];
 };
 
 // Valid roles the backend accepts for project members
@@ -41,24 +46,19 @@ function toProjectRole(systemRole?: string): string {
   return "customer_user"; // admin, customer_user, unknown → default
 }
 
-// ─── Milestone template ───────────────────────────────────────────────────────
+// ─── Project phases (milestones) ───────────────────────────────────────────────
+// FIX: previously 7 milestones were auto-generated with dates computed from
+// a fixed week-offset off the start date. There are only 5 real phases
+// (per the DRP Gantt chart), and the admin now types the planned date for
+// each phase directly rather than having it computed automatically.
 
-const MILESTONE_TEMPLATE = [
-  { order: 1, title: "Project Kickoff",                       weekOffset: 0  },
-  { order: 2, title: "Requirements Sign-Off",                 weekOffset: 2  },
-  { order: 3, title: "Design & Engineering Review",           weekOffset: 4  },
-  { order: 4, title: "Manufacturing / Build Complete",        weekOffset: 8  },
-  { order: 5, title: "Factory Acceptance Test (FAT)",         weekOffset: 10 },
-  { order: 6, title: "Site Installation & Commissioning",     weekOffset: 13 },
-  { order: 7, title: "Site Acceptance Test & Final Sign-Off", weekOffset: 15 },
+const PROJECT_PHASES = [
+  { order: 1, title: "Phase 1 — Enquiry & Proposal" },
+  { order: 2, title: "Phase 2 — Commercial Finalization" },
+  { order: 3, title: "Phase 3 — Design Release & Procurement" },
+  { order: 4, title: "Phase 4 — Internal Trial & Validation" },
+  { order: 5, title: "Phase 5 — Implementation at Customer End" },
 ];
-
-function addWeeks(dateStr: string, weeks: number): string {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + weeks * 7);
-  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-}
 
 // ─── Card accent colours ──────────────────────────────────────────────────────
 
@@ -95,8 +95,10 @@ function userDisplayName(u: any) {
  * - Strip any member_assignments whose role the backend won't accept (e.g. "admin")
  */
 function sanitize(form: ProjectForm) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { milestone_dates, ...rest } = form;
   return {
-    ...form,
+    ...rest,
     company:      form.company ? Number(form.company) : null,
     start_date:   form.start_date   || null,
     expected_end: form.expected_end || null,
@@ -106,52 +108,59 @@ function sanitize(form: ProjectForm) {
   };
 }
 
-// ─── Milestone Template Preview ───────────────────────────────────────────────
+// ─── Milestone Phase Dates (editable) ──────────────────────────────────────────
+// FIX: the admin now picks the planned date for each of the 5 phases
+// directly, instead of 7 dates being auto-computed from the start date.
 
-function MilestoneTemplatePreview({ startDate }: { startDate: string }) {
-  const [open, setOpen] = useState(false);
+function MilestonePhaseDates({
+  dates,
+  onChange,
+}: {
+  dates: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const setDate = (idx: number, value: string) => {
+    const next = [...dates];
+    next[idx] = value;
+    onChange(next);
+  };
+
+  const filledCount = dates.filter(Boolean).length;
 
   return (
     <div className="rounded-xl border border-orange-200 bg-orange-50 dark:border-orange-500/20 dark:bg-orange-500/5 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
-      >
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-orange-200 dark:border-orange-500/20">
         <Flag className="h-4 w-4 shrink-0 text-orange-500" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-orange-700 dark:text-orange-400">
-            7 milestones will be created automatically
+            Set the planned date for each project phase
           </p>
           <p className="text-xs text-orange-500/80 mt-0.5">
-            {startDate
-              ? `Starting from ${new Date(startDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`
-              : "Dates calculated from start date (today if not set)"}
+            All 5 dates are required to create the project.
           </p>
         </div>
-        {open
-          ? <ChevronUp className="h-4 w-4 shrink-0 text-orange-400" />
-          : <ChevronDown className="h-4 w-4 shrink-0 text-orange-400" />
-        }
-      </button>
+        <span className="shrink-0 text-xs font-semibold text-orange-500 bg-orange-100 dark:bg-orange-500/20 px-2 py-0.5 rounded-full">
+          {filledCount}/5 set
+        </span>
+      </div>
 
-      {open && (
-        <div className="border-t border-orange-200 dark:border-orange-500/20 divide-y divide-orange-100 dark:divide-orange-500/10">
-          {MILESTONE_TEMPLATE.map(m => (
-            <div key={m.order} className="flex items-center gap-3 px-4 py-2.5">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-500/20 font-mono text-[10px] font-bold text-orange-600 dark:text-orange-400">
-                {m.order}
-              </span>
-              <span className="flex-1 text-sm font-medium text-foreground">{m.title}</span>
-              {startDate && (
-                <span className="shrink-0 font-mono text-[10px] text-orange-500/70">
-                  {addWeeks(startDate, m.weekOffset)}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="divide-y divide-orange-100 dark:divide-orange-500/10">
+        {PROJECT_PHASES.map((m, idx) => (
+          <div key={m.order} className="flex items-center gap-3 px-4 py-2.5">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-500/20 font-mono text-[10px] font-bold text-orange-600 dark:text-orange-400">
+              {m.order}
+            </span>
+            <span className="flex-1 text-sm font-medium text-foreground">{m.title}</span>
+            <input
+              type="date"
+              required
+              value={dates[idx] ?? ""}
+              onChange={e => setDate(idx, e.target.value)}
+              className="shrink-0 w-[150px] rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20 transition-all"
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -253,7 +262,7 @@ function ProjectModal({
   initial?:   Partial<ProjectForm> & { id?: number };
   companies:  any[];
   teamUsers:  any[];
-  onSave:     (data: ReturnType<typeof sanitize>) => void;
+  onSave:     (data: ReturnType<typeof sanitize>, milestones?: MilestoneInput[]) => void;
   onClose:    () => void;
 }) {
   const isEdit = !!initial?.id;
@@ -266,6 +275,7 @@ function ProjectModal({
     start_date:         initial?.start_date      ?? "",
     expected_end:       initial?.expected_end    ?? "",
     member_assignments: initial?.member_assignments ?? [],
+    milestone_dates:    initial?.milestone_dates ?? Array(PROJECT_PHASES.length).fill(""),
   });
 
   const set =
@@ -312,8 +322,14 @@ function ProjectModal({
 
   // Team users excluding customer_admins (they're handled in Step 2)
   // Also exclude system admins from the list entirely — they have global access
+  // FIX: the backend now only returns company === "DMW" users from this
+  // endpoint, but we filter again here defensively in case a non-DMW user
+  // slips through (e.g. blank company on an older account).
   const visibleTeamUsers = teamUsers.filter(
-    (u: any) => u.role !== "customer_admin" && u.role !== "admin"
+    (u: any) =>
+      u.role !== "customer_admin" &&
+      u.role !== "admin" &&
+      (!u.company || u.company === "DMW")
   );
 
   return (
@@ -330,7 +346,24 @@ function ProjectModal({
           </button>
         </div>
 
-        <form onSubmit={e => { e.preventDefault(); onSave(sanitize(form)); }} className="p-6 space-y-5">
+        <form
+          onSubmit={e => {
+            e.preventDefault();
+            if (!isEdit && form.milestone_dates.some(d => !d)) {
+              alert("Please set a planned date for all 5 phases before creating the project.");
+              return;
+            }
+            const milestones: MilestoneInput[] | undefined = isEdit
+              ? undefined
+              : PROJECT_PHASES.map((p, idx) => ({
+                  order:        p.order,
+                  title:        p.title,
+                  planned_date: form.milestone_dates[idx],
+                }));
+            onSave(sanitize(form), milestones);
+          }}
+          className="p-6 space-y-5"
+        >
 
           {/* ── Basic Info ──────────────────────────────────────────────── */}
           <div className="grid grid-cols-2 gap-3">
@@ -378,9 +411,12 @@ function ProjectModal({
             </div>
           </div>
 
-          {/* ── Milestone preview (create only) ─────────────────────────── */}
+          {/* ── Milestone phase dates (create only) ─────────────────────── */}
           {!isEdit && (
-            <MilestoneTemplatePreview startDate={form.start_date} />
+            <MilestonePhaseDates
+              dates={form.milestone_dates}
+              onChange={next => setForm(f => ({ ...f, milestone_dates: next }))}
+            />
           )}
 
           {/* ── Step 1: Company Selection ────────────────────────────────── */}
@@ -449,6 +485,24 @@ function ProjectModal({
                 {form.member_assignments.filter(m => m.role !== "customer_admin").length} selected
               </span>
             </div>
+
+            {/* FIX: previously there was no clear summary of who is already
+                on the project — you had to scan the whole checklist for
+                highlighted rows. This surfaces it up front. */}
+            {isEdit && form.member_assignments.filter(m => m.role !== "customer_admin").length > 0 && (
+              <p className="mb-2 text-xs text-muted-foreground">
+                Currently assigned:{" "}
+                <span className="text-foreground font-medium">
+                  {form.member_assignments
+                    .filter(m => m.role !== "customer_admin")
+                    .map(m => {
+                      const u = teamUsers.find((t: any) => t.id === m.user);
+                      return u ? userDisplayName(u) : `#${m.user}`;
+                    })
+                    .join(", ")}
+                </span>
+              </p>
+            )}
 
             {visibleTeamUsers.length === 0 ? (
               <p className="text-center text-xs text-muted-foreground py-4">
@@ -531,7 +585,7 @@ function ProjectCard({
   onEdit:   () => void;
   onDelete: () => void;
 }) {
-  const { bg, shadow } = accent(project.id ?? 0);
+  const { bg } = accent(project.id ?? 0);
 
   const mono = (project.name ?? "P")
     .split(" ")
@@ -540,204 +594,138 @@ function ProjectCard({
     .join("")
     .toUpperCase();
 
-  const adminNames: string[] = project.customer_admins ?? [];
+  const adminNames: string[]              = project.customer_admins ?? [];
+  const teamMembers: ProjectMemberInfo[]  = project.team_members ?? [];
 
+  const STATUS_LABEL: Record<string, string> = {
+    planning:    "Planning",
+    in_progress: "In Progress",
+    on_hold:     "On Hold",
+    completed:   "Completed",
+    cancelled:   "Cancelled",
+  };
+
+  // FIX: the card used to be a fancy hover-flip layout with absolutely
+  // positioned content that broke as soon as extra content (like a member
+  // list) was added — text overlapped, the bottom panel clipped, etc.
+  // This is a plain static card: predictable height, nothing overlapping.
   return (
-    <>
-      <style>{`
-        .proj-card {
-          width: 100%;
-          min-height: 280px;
-          background: white;
-          border-radius: 32px;
-          padding: 3px;
-          position: relative;
-          box-shadow: ${shadow} 0px 70px 30px -50px;
-          transition: all 0.5s ease-in-out;
-        }
-        .dark .proj-card { background: hsl(var(--card)); }
+    <div className="flex flex-col rounded-2xl border border-border bg-card shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+      {/* Accent header */}
+      <div className="relative px-5 pt-5 pb-4" style={{ background: `linear-gradient(135deg, ${bg}22 0%, ${bg}0d 100%)` }}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-bold text-white"
+              style={{ background: bg }}
+            >
+              {mono}
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-foreground truncate">{project.name}</h3>
+              <p className="text-xs text-muted-foreground truncate">
+                {project.company_name ?? "No company"}
+              </p>
+            </div>
+          </div>
+          {project.contract_number && (
+            <span
+              className="shrink-0 text-[10px] font-bold uppercase tracking-wide rounded-full px-2 py-1"
+              style={{ color: bg, background: `${bg}18`, border: `1px solid ${bg}33` }}
+            >
+              #{project.contract_number}
+            </span>
+          )}
+        </div>
 
-        .proj-card .proj-pic {
-          position: absolute;
-          width: calc(100% - 6px); height: calc(100% - 6px);
-          top: 3px; left: 3px;
-          border-radius: 29px;
-          z-index: 1;
-          overflow: hidden;
-          transition: all 0.5s ease-in-out 0.2s, z-index 0.5s ease-in-out 0.2s;
-          display: flex; align-items: center; justify-content: center;
-          background: linear-gradient(135deg, ${bg}22 0%, ${bg}44 100%);
-        }
-        .proj-card .proj-pic .mono-text {
-          font-size: 5rem; font-weight: 900;
-          color: ${bg}; opacity: 0.35;
-          user-select: none;
-          transition: all 0.5s ease-in-out 0s;
-          font-family: 'Georgia', serif;
-          letter-spacing: -4px;
-        }
+        <span
+          className="mt-3 inline-block text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5"
+          style={{ color: bg, background: `${bg}18` }}
+        >
+          {STATUS_LABEL[project.status] ?? project.status}
+        </span>
+      </div>
 
-        .proj-card .proj-bottom {
-          position: absolute;
-          bottom: 3px; left: 3px; right: 3px;
-          background: ${bg};
-          top: 80%;
-          border-radius: 29px;
-          z-index: 2;
-          box-shadow: ${shadow} 0px 5px 5px 0px inset;
-          overflow: hidden;
-          transition: all 0.5s cubic-bezier(0.645,0.045,0.355,1) 0s;
-        }
+      {/* Body */}
+      <div className="flex-1 flex flex-col gap-3 px-5 py-4">
+        {project.description && (
+          <p className="text-xs text-muted-foreground line-clamp-2">{project.description}</p>
+        )}
 
-        .proj-card .proj-bottom .proj-content {
-          position: absolute;
-          bottom: 0; left: 1.5rem; right: 1.5rem;
-          height: 180px;
-        }
-        .proj-card .proj-bottom .proj-content .proj-name {
-          display: block; font-size: 1.1rem; color: white; font-weight: 700;
-          margin-top: 1rem;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .proj-card .proj-bottom .proj-content .proj-company {
-          display: block; font-size: 0.78rem; color: rgba(255,255,255,0.85);
-          margin-top: 0.25rem;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-          font-weight: 600;
-        }
-        .proj-card .proj-bottom .proj-content .proj-admins {
-          display: block; font-size: 0.7rem; color: rgba(255,255,255,0.65);
-          margin-top: 0.15rem;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .proj-card .proj-bottom .proj-content .proj-desc {
-          display: -webkit-box;
-          -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-          overflow: hidden;
-          font-size: 0.78rem; color: rgba(255,255,255,0.7);
-          margin-top: 0.5rem; line-height: 1.4;
-        }
+        {/* Progress */}
+        <div>
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1">
+            <span>Progress</span>
+            <span className="font-medium text-foreground">{project.progress ?? 0}%</span>
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${project.progress ?? 0}%`, background: bg }}
+            />
+          </div>
+        </div>
 
-        .proj-card .proj-bottom .proj-meta {
-          position: absolute;
-          bottom: 3.8rem; left: 1.5rem; right: 1.5rem;
-          display: flex; gap: 0.75rem; flex-wrap: wrap;
-          opacity: 0; transform: translateY(6px);
-          transition: opacity 0.3s ease 0.3s, transform 0.3s ease 0.3s;
-        }
-        .proj-card .proj-bottom .proj-meta span {
-          display: flex; align-items: center; gap: 0.3rem;
-          font-size: 0.7rem; color: rgba(255,255,255,0.85);
-        }
-
-        .proj-card .proj-bottom .proj-actions {
-          position: absolute;
-          bottom: 0.9rem; left: 1.5rem; right: 1.5rem;
-          display: flex; align-items: center; justify-content: space-between;
-        }
-        .proj-card .proj-bottom .proj-actions .proj-action-btn {
-          background: white; border: none; border-radius: 20px;
-          font-size: 0.65rem; font-weight: 700;
-          text-transform: uppercase; letter-spacing: 0.05em;
-          padding: 0.35rem 0.8rem;
-          display: flex; align-items: center; gap: 0.3rem;
-          cursor: pointer; transition: all 0.2s;
-          box-shadow: rgba(0,0,0,0.12) 0px 4px 8px;
-        }
-        .proj-card .proj-bottom .proj-actions .proj-action-btn.edit { color: ${bg}; }
-        .proj-card .proj-bottom .proj-actions .proj-action-btn.edit:hover { background: ${bg}22; }
-        .proj-card .proj-bottom .proj-actions .proj-action-btn.del { color: #ef4444; }
-        .proj-card .proj-bottom .proj-actions .proj-action-btn.del:hover { background: #fee2e2; }
-
-        .proj-card .proj-badge {
-          position: absolute; top: 1.1rem; right: 1.2rem; z-index: 4;
-        }
-        .proj-card .proj-badge span {
-          font-size: 0.6rem; font-weight: 700; text-transform: uppercase;
-          letter-spacing: 0.08em; color: ${bg};
-          background: ${bg}18; border: 1px solid ${bg}33;
-          border-radius: 20px; padding: 0.2rem 0.6rem;
-        }
-
-        .proj-card:hover { border-top-left-radius: 55px; }
-        .proj-card:hover .proj-bottom {
-          top: 20%;
-          border-radius: 80px 29px 29px 29px;
-          transition: all 0.5s cubic-bezier(0.645,0.045,0.355,1) 0.2s;
-        }
-        .proj-card:hover .proj-bottom .proj-meta { opacity: 1; transform: translateY(0); }
-        .proj-card:hover .proj-pic {
-          width: 100px; height: 100px; aspect-ratio: 1;
-          top: 10px; left: 10px; border-radius: 50%;
-          z-index: 3;
-          border: 7px solid ${bg}88;
-          box-shadow: ${shadow} 0px 5px 5px 0px;
-          transition: all 0.5s ease-in-out, z-index 0.5s ease-in-out 0.1s;
-        }
-        .proj-card:hover .proj-pic:hover { transform: scale(1.25); border-radius: 0; }
-        .proj-card:hover .proj-pic .mono-text {
-          font-size: 2rem; opacity: 0.7;
-          transition: all 0.5s ease-in-out 0.5s;
-        }
-      `}</style>
-
-      <div className="proj-card">
-        {project.contract_number && (
-          <div className="proj-badge">
-            <span>#{project.contract_number}</span>
+        {/* Dates */}
+        {(project.start_date || project.expected_end) && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Calendar size={12} />
+            {project.start_date && new Date(project.start_date).toLocaleDateString()}
+            {project.start_date && project.expected_end && " → "}
+            {project.expected_end && new Date(project.expected_end).toLocaleDateString()}
           </div>
         )}
 
-        <div className="proj-pic">
-          <span className="mono-text">{mono}</span>
-        </div>
-
-        <div className="proj-bottom">
-          <div className="proj-content">
-            <span className="proj-name">{project.name}</span>
-            <span className="proj-company">
-              {project.company_name ?? "—"}
-            </span>
-            {adminNames.length > 0 && (
-              <span className="proj-admins">
-                {adminNames.slice(0, 2).join(", ")}
-                {adminNames.length > 2 ? ` +${adminNames.length - 2} more` : ""}
-              </span>
-            )}
-            {project.description && (
-              <span className="proj-desc">{project.description}</span>
-            )}
-          </div>
-
-          <div className="proj-meta">
-            {(project.start_date || project.expected_end) && (
-              <span>
-                <Calendar size={11} color="rgba(255,255,255,0.9)" />
-                {project.start_date && new Date(project.start_date).toLocaleDateString()}
-                {project.start_date && project.expected_end && " → "}
-                {project.expected_end && new Date(project.expected_end).toLocaleDateString()}
-              </span>
-            )}
-            <span>
-              <Users size={11} color="rgba(255,255,255,0.9)" />
-              {project.member_count ?? 0} member{project.member_count !== 1 ? "s" : ""}
-            </span>
-          </div>
-
-          <div className="proj-actions">
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button className="proj-action-btn edit" onClick={onEdit}>
-                <Pencil size={10} /> Edit
-              </button>
-              <button className="proj-action-btn del" onClick={onDelete}>
-                <Trash2 size={10} /> Delete
-              </button>
-            </div>
-            <Mail size={16} color="rgba(255,255,255,0.7)" />
-          </div>
+        {/* ── Members — FIX: this is the actual project roster, not just a count ── */}
+        <div className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 space-y-1.5">
+          {adminNames.length === 0 && teamMembers.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+              <Users size={12} /> No members assigned yet
+            </p>
+          ) : (
+            <>
+              {adminNames.length > 0 && (
+                <p className="text-[11px] text-foreground flex items-start gap-1.5">
+                  <ShieldCheck size={12} className="shrink-0 mt-0.5 text-orange-500" />
+                  <span>
+                    <span className="text-muted-foreground">Customer admin: </span>
+                    {adminNames.join(", ")}
+                  </span>
+                </p>
+              )}
+              {teamMembers.length > 0 && (
+                <p className="text-[11px] text-foreground flex items-start gap-1.5">
+                  <Users size={12} className="shrink-0 mt-0.5 text-muted-foreground" />
+                  <span>
+                    <span className="text-muted-foreground">Team: </span>
+                    {teamMembers.map(m => m.name).join(", ")}
+                  </span>
+                </p>
+              )}
+            </>
+          )}
         </div>
       </div>
-    </>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between gap-2 border-t border-border px-5 py-3">
+        <div className="flex gap-2">
+          <button
+            onClick={onEdit}
+            className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted transition-colors"
+          >
+            <Pencil size={12} /> Edit
+          </button>
+          <button
+            onClick={onDelete}
+            className="flex items-center gap-1 rounded-lg border border-rose-200 text-rose-600 px-2.5 py-1.5 text-xs font-medium hover:bg-rose-50 transition-colors"
+          >
+            <Trash2 size={12} /> Delete
+          </button>
+        </div>
+        <Mail size={15} className="text-muted-foreground" />
+      </div>
+    </div>
   );
 }
 
@@ -801,7 +789,21 @@ export default function AdminProjectsPage() {
         <ProjectModal
           companies={companies}
           teamUsers={teamUsers}
-          onSave={data => { createProject.mutate(data); setModal(null); }}
+          onSave={async (data, milestones) => {
+            const project = await createProject.mutateAsync(data);
+            if (milestones && milestones.length > 0) {
+              try {
+                await createProjectMilestones(project.id, milestones);
+              } catch (err) {
+                console.error("Project created, but milestone creation failed:", err);
+                alert(
+                  "The project was created, but the phase milestones couldn't be saved. " +
+                  "Please add them from the project's milestone timeline."
+                );
+              }
+            }
+            setModal(null);
+          }}
           onClose={() => setModal(null)} />
       )}
 

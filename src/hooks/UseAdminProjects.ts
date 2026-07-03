@@ -12,7 +12,10 @@
  *   useDeleteProject()
  *   useCompanies()                        – Step 1: company master dropdown
  *   useCustomerAdminsByCompany(companyId) – Step 2: admins for selected company
- *   useTeamUsers()                        – project_manager / customer_user list
+ *   useTeamUsers()                        – DMW-only project_manager / customer_user list
+ *   createProjectMilestones(projectId, milestones) – creates the 5 phase
+ *     milestones on the milestones app right after a project is created,
+ *     using the admin-chosen dates (POST /milestones/ per phase).
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -38,6 +41,15 @@ export interface TeamUser {
   email:     string;
   full_name: string;
   role:      string;
+  company?:  string;
+}
+
+// A member already assigned to a project (customer_admin or team member)
+export interface ProjectMemberInfo {
+  id:    number;
+  name:  string;
+  email: string;
+  role:  string;
 }
 
 export interface ProjectListItem {
@@ -46,6 +58,10 @@ export interface ProjectListItem {
   company:         number | null;
   company_name:    string | null;
   customer_admins: string[];
+  // FIX: the card/modal previously had no way to show who is actually on
+  // the project besides a bare count — team_members now carries the full
+  // project_manager / customer_user roster returned by the backend.
+  team_members:    ProjectMemberInfo[];
   status:          string;
   progress:        number;
   robot_model:     string;
@@ -53,6 +69,13 @@ export interface ProjectListItem {
   expected_end:    string | null;
   member_count:    number;
   created_at:      string;
+}
+
+// One of the 5 project phases, with the date the admin chose for it
+export interface MilestoneInput {
+  order:        number;
+  title:        string;
+  planned_date: string; // YYYY-MM-DD
 }
 
 // ─── Project hooks ────────────────────────────────────────────────────────────
@@ -93,6 +116,31 @@ export function useDeleteProject() {
   });
 }
 
+/**
+ * Creates the 5 phase milestones for a freshly-created project, one POST
+ * per phase to the milestones app (see milestones/urls.py — MilestoneListCreateView).
+ * Called right after useCreateProject succeeds, using the dates the admin
+ * typed in for each phase. The creating user is an admin, so the
+ * `user_is_project_member` check on the milestones view passes automatically.
+ */
+export async function createProjectMilestones(
+  projectId: number,
+  milestones: MilestoneInput[]
+) {
+  return Promise.all(
+    milestones.map(m =>
+      api.post("/milestones/", {
+        project:      projectId,
+        title:        m.title,
+        description:  "",
+        status:       "pending",
+        planned_date: m.planned_date,
+        order:        m.order,
+      })
+    )
+  );
+}
+
 // ─── Dropdown hooks ───────────────────────────────────────────────────────────
 
 /**
@@ -131,8 +179,11 @@ export function useCustomerAdminsByCompany(companyId: number | null) {
 }
 
 /**
- * All active users — for the Team Members panel (project_manager / customer_user).
+ * DMW staff only — for the Team Members panel (project_manager / customer_user).
  * Endpoint: GET /projects/users/dropdown/
+ * FIX: the backend now filters this to company === "DMW" server-side
+ * (see UserDropdownView.get_queryset in projects/views.py), so customers
+ * and other companies no longer show up as selectable team members.
  */
 export function useTeamUsers() {
   return useQuery<TeamUser[]>({

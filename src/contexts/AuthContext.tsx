@@ -24,6 +24,7 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  logoutAll: () => Promise<void>;   // ← New
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -31,9 +32,8 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser]       = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  // ✅ No useNavigate here — AuthProvider can now safely live outside BrowserRouter
 
-  // ── On mount: restore session from stored access token ──────────────────
+  // On mount: restore session
   useEffect(() => {
     const token = localStorage.getItem("access");
     if (!token) {
@@ -52,42 +52,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // ── Login — just sets state, caller handles navigation ──────────────────
   const login = useCallback(async (email: string, password: string) => {
     await authService.login(email, password);
     const profile = await authService.getProfile();
     setUser(profile);
-    // ✅ Removed: navigate("/", { replace: true })
-    //    → call navigate() in your Login page component after awaiting login()
   }, []);
 
-  // ── Logout — just clears state, caller handles navigation ───────────────
+  // Regular logout (current session only)
   const logout = useCallback(async () => {
     const refresh = localStorage.getItem("refresh");
     const access  = localStorage.getItem("access");
 
-    if (refresh) {
+    if (refresh && access) {
       try {
         const { default: api } = await import("@/lib/api");
-        await api.post(
-          "/auth/logout/",
-          { refresh },
-          { headers: { Authorization: `Bearer ${access}` } },
-        );
+        await api.post("/auth/logout/", { refresh }, {
+          headers: { Authorization: `Bearer ${access}` },
+        });
       } catch {
-        // Server unreachable or already blacklisted — still clear locally
+        // Ignore errors — still clear local data
       }
     }
 
     localStorage.removeItem("access");
     localStorage.removeItem("refresh");
     setUser(null);
-    // ✅ Removed: navigate("/login", { replace: true })
-    //    → call navigate() in your logout handler after awaiting logout()
+  }, []);
+
+  // NEW: Logout from ALL devices
+  const logoutAll = useCallback(async () => {
+    const access = localStorage.getItem("access");
+
+    if (!access) return;
+
+    try {
+      const { default: api } = await import("@/lib/api");
+      // This endpoint should invalidate ALL refresh tokens for the user
+      await api.post("/auth/logout-all/", {}, {
+        headers: { Authorization: `Bearer ${access}` },
+      });
+    } catch (error) {
+      console.error("Logout all failed on server:", error);
+      // Still proceed with local cleanup
+    }
+
+    // Always clear local storage
+    localStorage.removeItem("access");
+    localStorage.removeItem("refresh");
+    setUser(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, logoutAll }}>
       {children}
     </AuthContext.Provider>
   );

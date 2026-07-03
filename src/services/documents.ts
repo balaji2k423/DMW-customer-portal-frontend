@@ -263,14 +263,48 @@ export const documentsService = {
     const response = await api.get(`/documents/${id}/download/`, {
       responseType: "blob",
     });
-    const url  = window.URL.createObjectURL(new Blob([response.data]));
+
+    // Defensive checks: a shared axios instance sometimes carries a response
+    // interceptor tuned for JSON payloads (e.g. unwrapping `{ data: ... }`)
+    // that can mangle a binary blob response. If that happens `response.data`
+    // silently stops being a Blob, the download counter still incremented on
+    // the backend, and the click below becomes a no-op — which matches the
+    // "counter goes up but nothing downloads" symptom exactly. Fail loudly
+    // instead of failing silently so the UI can show an error.
+    const blobData = response.data;
+    if (!(blobData instanceof Blob)) {
+      throw new Error(
+        "Download response was not a file (got " + typeof blobData + "). " +
+        "Check that the shared axios instance passes responseType:'blob' through unmodified."
+      );
+    }
+
+    // A JSON error body served with a 200 status (or a mis-set content-type)
+    // will still be "a Blob", just the wrong kind — catch that too.
+    if (blobData.type && blobData.type.includes("application/json") && blobData.size < 5000) {
+      const text = await blobData.text();
+      try {
+        const parsed = JSON.parse(text);
+        throw new Error(parsed.error || "Server returned an error instead of a file.");
+      } catch {
+        // not JSON after all — fall through and download as-is
+      }
+    }
+
+    if (blobData.size === 0) {
+      throw new Error("The downloaded file was empty. Please try again or contact support.");
+    }
+
+    const url  = window.URL.createObjectURL(blobData);
     const link = document.createElement("a");
     link.href  = url;
     link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     link.remove();
-    window.URL.revokeObjectURL(url);
+    // Revoke on a delay — revoking immediately can race the browser's
+    // download handoff in some browsers (esp. Firefox) and abort the save.
+    setTimeout(() => window.URL.revokeObjectURL(url), 30_000);
   },
 
   /**
@@ -287,5 +321,26 @@ export const documentsService = {
     const contentType =
       (response.headers["content-type"] as string | undefined) ?? "application/octet-stream";
     return { buffer: response.data as ArrayBuffer, contentType };
+  },
+
+  /**
+   * Open a file (doc/docx/xls/xlsx/etc.) in a new browser tab.
+   *
+   * IMPORTANT: `doc.file_url` points at protected media storage — opening it
+   * directly with `window.open()` sends no Authorization header, so the
+   * request 401s (or gets redirected to an HTML login page) and the tab
+   * appears to do nothing. This routes through the authenticated axios
+   * instance instead, same as the inline PDF/image/text preview does.
+   */
+  openInNewTab: async (id: number, filename: string): Promise<void> => {
+    const { buffer, contentType } = await documentsService.fetchFileBuffer(id);
+    const blob = new Blob([buffer], { type: contentType || "application/octet-stream" });
+    const url  = window.URL.createObjectURL(blob);
+    const win  = window.open(url, "_blank");
+    if (!win) {
+      // Popup blocked — fall back to a real download so the user still gets the file.
+      await documentsService.download(id, filename);
+    }
+    setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
   },
 };
